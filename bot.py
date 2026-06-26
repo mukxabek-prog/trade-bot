@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID  = int(os.getenv("ADMIN_ID", "0"))
 
-REQUIRED_CHANNEL = "@bulldrop_n1"   # ← o'zgartiring
+REQUIRED_CHANNEL = "@roblox_chat_UZ"   # ← o'zgartiring
 CARD_NUMBER      = "9860 1234 5678 9012"  # ← o'zgartiring
 CARD_OWNER       = "MUHammadjon osha iosha" # ← o'zgartiring
 
