@@ -17,7 +17,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # MAJBURIY KANAL SOZLAMASI (Kanal usernamesini shu yerga yozing)
 # DIQQAT: Bot ushbu kanalda muloqot (admin) huquqiga ega bo'lishi shart!
-REQUIRED_CHANNEL = "@kanal_username"  # O'zingizning kanal usernamesini yozing (masalan: @my_channel)
+REQUIRED_CHANNEL = "@kanal_username"  # O'zingizning kanal usernamesini yozing (masalan: @roblox_trade_chat)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
