@@ -1,0 +1,46 @@
+import os
+
+# Telegramda @BotFather orqali olingan tokenni shu yerga qo'ying
+# (yoki muhit o'zgaruvchisi BOT_TOKEN orqali bering — Render'da shunday qilamiz)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "BOT_TOKEN_NI_BU_YERGA_QOYING")
+
+# Admin foydalanuvchilarning Telegram user_id lari (ixtiyoriy, kelajakda admin
+# buyruqlari uchun: /give, /reset va h.k.)
+ADMIN_IDS = []  # masalan: [123456789]
+
+# --------------------------------------------------------------------------
+# MA'LUMOTLAR BAZASI (PostgreSQL)
+# --------------------------------------------------------------------------
+# Render'ning bepul tarifida web-servis fayl tizimi vaqtinchalik (ephemeral):
+# servis uxlab qolganda (15 daqiqa harakatsizlikdan keyin) yoki qayta
+# deploy qilinganda lokal fayllar (shu jumladan SQLite .db fayli) o'chib
+# ketadi. Shu sababli ma'lumotlar Render Postgres (yoki Neon/Supabase kabi
+# bepul Postgres) da saqlanadi — bu servis qayta tirilganda ham yo'qolmaydi.
+#
+# DATABASE_URL quyidagi ko'rinishda bo'ladi:
+#   postgresql://user:password@host:port/dbname
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# --------------------------------------------------------------------------
+# WEBHOOK (Render'da ishlatish uchun — webhook_app.py shuni ishlatadi)
+# --------------------------------------------------------------------------
+# Render web-servislar uchun avtomatik RENDER_EXTERNAL_URL beradi
+# (masalan https://sizning-bot.onrender.com). Agar kerak bo'lsa,
+# Render Dashboard > Environment bo'limida WEBHOOK_HOST ni qo'lda ham
+# belgilashingiz mumkin.
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") or os.getenv("RENDER_EXTERNAL_URL", "")
+WEBHOOK_PATH = "/webhook"
+
+# Render PORT muhit o'zgaruvchisini avtomatik beradi (default 10000)
+PORT = int(os.getenv("PORT", "10000"))
+
+# --------------------------------------------------------------------------
+# IQTISODIYOT sozlamalari (hammasi VIRTUAL coin, real pul/Robux EMAS)
+# --------------------------------------------------------------------------
+STARTING_BALANCE = 1000        # yangi foydalanuvchiga beriladigan boshlang'ich coin
+DAILY_BONUS_MIN = 100
+DAILY_BONUS_MAX = 300
+DAILY_COOLDOWN_HOURS = 24
+
+SHOP_SLOTS = 6                 # /shop bosilganda "konveyer"da chiqadigan random item soni
+MARKET_PAGE_SIZE = 6           # /market sahifasida ko'rsatiladigan e'lon soni
