@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID  = int(os.getenv("ADMIN_ID", "0"))
 
-REQUIRED_CHANNEL = "@roblox"
+REQUIRED_CHANNEL = "@bulldrop_n1"
 
 # Karta ma'lumotlari (o'zgartiring)
 CARD_NUMBER  = "9860 1234 5678 9012"
