@@ -4,68 +4,43 @@ import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.exceptions import TelegramBadRequest
-import asyncpg
 
 # LOGGING SOZLAMALARI
 logging.basicConfig(level=logging.INFO)
 
-# ENVIRONMENT VARIABLES (Render'dan olinadi)
+# ENVIRONMENT VARIABLES
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("8325726426")
-DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
-# MAJBURIY KANAL SOZLAMASI (Kanal usernamesini shu yerga yozing)
-# DIQQAT: Bot ushbu kanalda muloqot (admin) huquqiga ega bo'lishi shart!
-REQUIRED_CHANNEL = "@kanal_username"  # O'zingizning kanal usernamesini yozing (masalan: @my_channel)
+# MAJBURIY KANAL USERNAME (Shu yerga kanalingizni `@` bilan yozing)
+# DIQQAT: Bot ushbu kanalda ADMIN bo'lishi shart, aks holda odamlarni tekshira olmaydi!
+REQUIRED_CHANNEL = "@roblox_uz" 
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-pool = None
-
-# DATABASE BILAN BOG'LANISH
-async def init_db():
-    global pool
-    if DATABASE_URL:
-        pool = await asyncpg.create_pool(DATABASE_URL)
-        async with pool.acquire() as conn:
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username VARCHAR(255),
-                    balance INT DEFAULT 0
-                )
-            ''')
-            logging.info("Ma'lumotlar bazasi muvaffaqiyatli ulandi.")
-    else:
-        logging.error("DATABASE_URL topilmadi!")
 
 # MAJBURIY OBUNANI TEKSHIRISH FUNKSIYASI
-async def check_subscription(user_id: int) -> bool:
+async def is_user_subscribed(user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
         if member.status in ["creator", "administrator", "member"]:
             return True
         return False
-    except TelegramBadRequest:
-        # Agar kanal topilmasa yoki bot u yerda admin bo'lmasa, vaqtincha True qaytaradi
-        logging.warning(f"Kanal topilmadi yoki bot admin emas: {REQUIRED_CHANNEL}")
-        return True
     except Exception as e:
         logging.error(f"Obunani tekshirishda xatolik: {e}")
-        return True
+        # Agar bot kanalda admin bo'lmasa yoki username noto'g'ri bo'lsa xato beradi
+        return False
 
-# INLINE KANALGA OBUNA BO'LISH TUGMASI
+# INLINE OBUNA BO'LISH TUGMASI
 def subscription_keyboard():
     builder = InlineKeyboardBuilder()
-    # Foydalanuvchi kanalga o'tishi uchun havola (link)
     channel_url = f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}"
     builder.button(text="📢 Kanalga obuna bo'lish", url=channel_url)
-    builder.button(text="✅ Obunani tekshirish", callback_data="check_sub")
+    builder.button(text="✅ Obunani tasdiqlash", callback_data="check_sub")
     builder.adjust(1)
     return builder.as_markup()
 
-# ASOSIY PASDAGI MENYU (REPLY KEYBOARD - 8 TA BO'LIM)
+# ASOSIY PASDAGI MENYU (REPLY KEYBOARD)
 def main_reply_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="🛒 Robux sotib olish")
@@ -76,7 +51,7 @@ def main_reply_keyboard():
     builder.button(text="➕ Trade qo'shish")
     builder.button(text="➕ Sotish qo'shish")
     builder.button(text="💬 Bizning chatimiz")
-    builder.adjust(2, 2, 2, 2) # Tugmalarni qatorma-qator 2 tadan chiroyli joylashtiradi
+    builder.adjust(2, 2, 2, 2)
     return builder.as_markup(resize_keyboard=True)
 
 # /START BUYRUG'I
@@ -85,21 +60,11 @@ async def start_cmd(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username or "Foydalanuvchi"
     
-    # Bazaga qo'shish
-    if pool:
-        async with pool.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO users (user_id, username, balance)
-                VALUES ($1, $2, 0)
-                ON CONFLICT (user_id) DO NOTHING
-            ''', user_id, username)
-
     # Obunani tekshirish
-    is_subscribed = await check_subscription(user_id)
-    if not is_subscribed:
+    if not await is_user_subscribed(user_id):
         await message.answer(
-            f"❌ Botdan foydalanishdan oldin homiy kanalimizga obuna bo'lishingiz majburiy!\n\n"
-            f"Obuna bo'lib, keyin 'Tekshirish' tugmasini bosing.",
+            f"❌ Botdan foydalanish uchun homiy kanalimizga obuna bo'lishingiz shart!\n\n"
+            f"Obuna bo'lib, keyin pastdagi **Tasdiqlash** tugmasini bosing.",
             reply_markup=subscription_keyboard()
         )
         return
@@ -107,81 +72,111 @@ async def start_cmd(message: types.Message):
     await message.answer(
         f"🌟 Assalomu alaykum!\n"
         f"👤 Biz sizni ko'rganimizdan juda ham xursandmiz, @{username}!\n\n"
-        f"🤖 **Brainrot Trade Bot** sizga xizmat ko'rsatishga tayyor. Quyidagi menyudan foydalaning:",
+        f"🤖 **Brainrot Trade Bot**ga xush kelibsiz. Quyidagi menyudan foydalaning:",
         reply_markup=main_reply_keyboard()
     )
 
-# INLINE OBUNANI TASDIQLASH TUGMASI BOSILGANDA
+# TASDIQLASH TUGMASI BOSILGANDA
 @dp.callback_query(F.data == "check_sub")
 async def check_sub_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     username = callback.from_user.username or "Foydalanuvchi"
-    is_subscribed = await check_subscription(user_id)
     
-    if is_subscribed:
-        await callback.message.delete() # Obuna bo'ling degan xabarni o'chirish
+    if await is_user_subscribed(user_id):
+        await callback.message.delete()
         await callback.message.answer(
-            f"🎉 Tabriklaymiz, obuna muvaffaqiyatli tasdiqlandi!\n\n"
+            f"🎉 Obuna tasdiqlandi!\n\n"
             f"🌟 Assalomu alaykum! Biz sizni ko'rganimizdan juda ham xursandmiz, @{username}!\n"
-            f"Quyidagi menyulardan foydalanishingiz mumkin:",
+            f"Bot ishga tushdi, menyulardan foydalanishingiz mumkin:",
             reply_markup=main_reply_keyboard()
         )
     else:
-        await callback.answer("❌ Siz hali ham kanalga obuna bo'lmagansiz!", show_alert=True)
+        await callback.answer("❌ Siz hali kanalga obuna bo'lmagansiz! Iltimos, oldin obuna bo'ling.", show_alert=True)
 
-# --- PASDAGI 8 TA MENYU TUGMALARI UCHUN HANDLERLAR ---
-
+# ROBUX SOTIB OLISH BO'LIMI
 @dp.message(F.text == "🛒 Robux sotib olish")
 async def robux_buy(message: types.Message):
-    if not await check_subscription(message.from_user.id): return
-    await message.answer("🛒 **Robux sotib olish bo'limi:**\nBu yerda tez kunda arzon narxlarda robux sotib olish yo'lga qo'yiladi!")
+    if not await is_user_subscribed(message.from_user.id):
+        await message.answer("❌ Botdan foydalanish uchun avval kanalga obuna bo'ling!", reply_markup=subscription_keyboard())
+        return
+        
+    prices_text = (
+        "🔥 **ROBUX NARXLAR** 🔥\n\n"
+        "🪙 40 ROBUX — 7 000 so'm\n"
+        "🪙 80 ROBUX — 14 000 so'm\n"
+        "🪙 120 ROBUX — 21 000 so'm\n"
+        "🪙 160 ROBUX — 28 000 so'm\n"
+        "🪙 200 ROBUX — 35 000 so'm\n"
+        "🪙 240 ROBUX — 42 000 so'm\n"
+        "🪙 280 ROBUX — 49 000 so'm\n"
+        "🪙 320 ROBUX — 56 000 so'm\n"
+        "🪙 360 ROBUX — 63 000 so'm\n\n"
+        "🪙 400 ROBUX — 65 000 so'm\n"
+        "🪙 440 ROBUX — 72 000 so'm\n"
+        "🪙 480 ROBUX — 79 000 so'm\n"
+        "🪙 520 ROBUX — 86 000 so'm\n"
+        "🪙 560 ROBUX — 93 000 so'm\n"
+        "🔥 700 ROBUX — 100 000 so'm 🔥\n"
+        "🪙 740 ROBUX — 107 000 so'm\n"
+        "🪙 780 ROBUX — 114 000 so'm\n"
+        "🪙 820 ROBUX — 121 000 so'm\n"
+        "🪙 860 ROBUX — 128 000 so'm\n\n"
+        "🪙 1000 ROBUX — 132 000 so'm\n"
+        "🪙 1500 ROBUX — 197 000 so'm\n"
+        "🪙 2000 ROBUX — 265 000 so'm\n\n"
+        "💳 Sotib olish uchun adminga murojaat qiling yoki hisobingizni to'ldiring!"
+    )
+    await message.answer(prices_text)
 
+# BOSHQA BO'LIMLAR (OBUNA TEKSHIRUVI BILAN)
 @dp.message(F.text == "👤 Profil")
 async def view_profile(message: types.Message):
-    if not await check_subscription(message.from_user.id): return
-    user_id = message.from_user.id
-    balance = 0
-    if pool:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow('SELECT balance FROM users WHERE user_id = $1', user_id)
-            if row: balance = row['balance']
-            
-    await message.answer(
-        f"👤 **Sizning profilingiz:**\n\n"
-        f"🆔 ID: `{user_id}`\n"
-        f"👤 Username: @{message.from_user.username or 'yoq'}\n"
-        f"💰 Balans: {balance} Robux"
-    )
+    if not await is_user_subscribed(message.from_user.id):
+        await message.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=subscription_keyboard())
+        return
+    await message.answer(f"👤 **Sizning profilingiz:**\n\n🆔 ID: `{message.from_user.id}`\n👤 Username: @{message.from_user.username or 'yoq'}\n💰 Balans: 0 Robux")
 
 @dp.message(F.text == "💰 Hisob to'ldirish")
 async def deposit_money(message: types.Message):
-    if not await check_subscription(message.from_user.id): return
-    await message.answer("💰 **Hisobni to'ldirish:**\nTo'lov tizimlari orqali bot hisobingizni avtomat to'ldirish bo'limi.")
+    if not await is_user_subscribed(message.from_user.id):
+        await message.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=subscription_keyboard())
+        return
+    await message.answer("💰 **Hisobni to'ldirish bo'limi** yaqin orada ishga tushadi.")
 
 @dp.message(F.text == "🔄 Tradelar")
 async def view_trades(message: types.Message):
-    if not await check_subscription(message.from_user.id): return
-    await message.answer("🔄 **Mavjud Tradelar ro'yxati:**\nBu yerda barcha foydalanuvchilar qo'shgan faol tradelar ko'rinadi.")
+    if not await is_user_subscribed(message.from_user.id):
+        await message.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=subscription_keyboard())
+        return
+    await message.answer("🔄 Faol tradelar ro'yxati bo'sh.")
 
 @dp.message(F.text == "📊 Sotuvlar")
 async def view_sales(message: types.Message):
-    if not await check_subscription(message.from_user.id): return
-    await message.answer("📊 **Sotuvdagi narsalar:**\nSotuvga qo'yilgan barcha akkauntlar va narsalar ro'yxati.")
+    if not await is_user_subscribed(message.from_user.id):
+        await message.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=subscription_keyboard())
+        return
+    await message.answer("📊 Sotuvdagi buyumlar ro'yxati bo'sh.")
 
 @dp.message(F.text == "➕ Trade qo'shish")
 async def add_trade(message: types.Message):
-    if not await check_subscription(message.from_user.id): return
-    await message.answer("➕ **Yangi Trade yaratish:**\nO'z tradingizni e'lon qiling.")
+    if not await is_user_subscribed(message.from_user.id):
+        await message.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=subscription_keyboard())
+        return
+    await message.answer("➕ Yangi trade e'lon qilish bo'limi.")
 
 @dp.message(F.text == "➕ Sotish qo'shish")
 async def add_sale(message: types.Message):
-    if not await check_subscription(message.from_user.id): return
-    await message.answer("➕ **Sotuvga narsa qo'shish:**\nSotmoqchi bo'lgan narsangiz haqida ma'lumot kiriting.")
+    if not await is_user_subscribed(message.from_user.id):
+        await message.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=subscription_keyboard())
+        return
+    await message.answer("➕ Sotuvga yangi narsa qo'shish bo'limi.")
 
 @dp.message(F.text == "💬 Bizning chatimiz")
 async def community_chat(message: types.Message):
-    if not await check_subscription(message.from_user.id): return
-    await message.answer("💬 **Guruhimiz / Chatimiz:**\nFoydalanuvchilar bilan suhbatlashish uchun chat linki shu yerda bo'ladi.")
+    if not await is_user_subscribed(message.from_user.id):
+        await message.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=subscription_keyboard())
+        return
+    await message.answer("💬 Bizning rasmiy chatimiz guruh linki tez kunda joylanadi.")
 
 # ADMIN PANEL
 @dp.message(Command("admin"))
@@ -191,10 +186,8 @@ async def admin_panel(message: types.Message):
     else:
         await message.answer("❌ Bu buyruq faqat admin uchun.")
 
-# BOTNI ISHGA TUSHIRISH
 async def main():
-    await init_db()
-    logging.info("Bot pastki menyular bilan muvaffaqiyatli ishga tushmoqda...")
+    logging.info("Bot ishga tushmoqda...")
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
