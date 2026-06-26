@@ -12,12 +12,12 @@ logging.basicConfig(level=logging.INFO)
 
 # ENVIRONMENT VARIABLES (Render'dan olinadi)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = os.getenv("8325726426")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # MAJBURIY KANAL SOZLAMASI (Kanal usernamesini shu yerga yozing)
 # DIQQAT: Bot ushbu kanalda muloqot (admin) huquqiga ega bo'lishi shart!
-REQUIRED_CHANNEL = "@kanal_username"  # O'zingizning kanal usernamesini yozing (masalan: @roblox_trade_chat)
+REQUIRED_CHANNEL = "@kanal_username"  # O'zingizning kanal usernamesini yozing (masalan: @my_channel)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -186,7 +186,7 @@ async def community_chat(message: types.Message):
 # ADMIN PANEL
 @dp.message(Command("admin"))
 async def admin_panel(message: types.Message):
-    if str(message.from_user.id) == str(8325726426,7405798326):
+    if str(message.from_user.id) == str(ADMIN_ID):
         await message.answer("🛠 Admin paneliga xush kelibsiz, xo'jayin!")
     else:
         await message.answer("❌ Bu buyruq faqat admin uchun.")
