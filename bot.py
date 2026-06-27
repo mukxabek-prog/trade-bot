@@ -1,18 +1,17 @@
 import os
-import logging
 import asyncio
+import logging
+from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext  # FSM uchun to'g'ri import
-from aiogram.client.default import DefaultBotProperties  # Parse_mode xatosi uchun
-from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
-from dotenv import load_dotenv
+from aiogram.fsm.context import FSMContext
+from aiogram.client.default import DefaultBotProperties
 
 load_dotenv()
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
 # ========================================================
@@ -65,8 +64,12 @@ class AdminStates(StatesGroup):
     waiting_for_user_id = State()
     waiting_for_balance = State()
 
+class Broadcast(StatesGroup):
+    photo = State()
+    text = State()
+
 # ========================================================
-# KEYBOARDS
+# KEYBOARDS (aiogram 3.x uchun to'g'rilangan variant)
 # ========================================================
 def main_menu_kb():
     kb = [
@@ -83,8 +86,11 @@ def admin_menu_kb():
     ]
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
+def cancel_kb():
+    return types.ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="❌ Bekor qilish")]], resize_keyboard=True)
+
 # ========================================================
-# MIDDLEWARES / CHECKS
+# AUX FUNCTIONS
 # ========================================================
 async def check_subscription(user_id: int) -> bool:
     try:
@@ -93,6 +99,13 @@ async def check_subscription(user_id: int) -> bool:
     except Exception as e:
         logging.error(f"Kanal tekshirishda xatolik: {e}")
         return True
+
+async def all_user_ids():
+    cur = users.find({}, {"user_id": 1})
+    res = []
+    async for d in cur:
+        res.append(d["user_id"])
+    return res
 
 # ========================================================
 # HANDLERS
@@ -122,7 +135,7 @@ async def cb_check_sub(callback: types.CallbackQuery):
         await callback.message.answer("Rahmat! Botdan foydalanishingiz mumkin.", reply_markup=main_menu_kb())
         await callback.answer()
     else:
-        await callback.answer("Siz hali a'zo bo'lmadinigz!", show_alert=True)
+        await callback.answer("Siz hali a'zo bo'lmadingiz!", show_alert=True)
 
 @dp.message(F.text == "👤 Profil")
 async def menu_profile(message: types.Message):
@@ -133,11 +146,15 @@ async def menu_profile(message: types.Message):
 
 @dp.message(F.text == "💰 Balans to'ldirish")
 async def menu_deposit(message: types.Message, state: FSMContext):
-    await message.answer("Qancha to'ldirmoqchisiz (so'mda)? Faqat raqam kiriting:")
+    await message.answer("Qancha to'ldirmoqchisiz (so'mda)? Faqat raqam kiriting:", reply_markup=cancel_kb())
     await state.set_state(DepositStates.waiting_for_amount)
 
 @dp.message(DepositStates.waiting_for_amount)
 async def deposit_amount(message: types.Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=main_menu_kb())
+        return
     if not message.text.isdigit():
         await message.answer("Iltimos, faqat musbat raqam kiriting:")
         return
@@ -145,11 +162,20 @@ async def deposit_amount(message: types.Message, state: FSMContext):
     await state.update_data(amount=amount)
     
     text = f"To'lov miqdori: *{amount} so'm*\n\n💳 Karta: `{CARD_NUMBER}`\n👤 Ega: *{CARD_OWNER}*\n\nTo'lovni amalga oshirib, chekni (rasm shaklida) shu yerga yuboring."
-    await message.answer(text)
+    await message.answer(text, reply_markup=cancel_kb())
     await state.set_state(DepositStates.waiting_for_receipt)
 
-@dp.message(DepositStates.waiting_for_receipt, F.photo)
+@dp.message(DepositStates.waiting_for_receipt)
 async def deposit_receipt(message: types.Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=main_menu_kb())
+        return
+        
+    if not message.photo:
+        await message.answer("Iltimos, chek rasmini yuboring yoki bekor qiling:")
+        return
+
     data = await state.get_data()
     amount = data['amount']
     photo_id = message.photo[-1].file_id
@@ -238,22 +264,45 @@ async def admin_back(message: types.Message):
 @dp.message(F.text == "📢 Xabar yuborish")
 async def admin_broadcast_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
-    await message.answer("Barcha foydalanuvchilarga yuboriladigan xabarni kiriting:")
-    await state.set_state(AdminStates.waiting_for_broadcast)
+    await message.answer("📸 Reklama rasmini yuboring (agar rasm bo'lmasa, har qanday matn yuboring):", reply_markup=cancel_kb())
+    await state.set_state(Broadcast.photo)
 
-@dp.message(AdminStates.waiting_for_broadcast)
-async def admin_broadcast_send(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
-    cursor = users.find({})
-    count = 0
-    async for u in cursor:
-        try:
-            await bot.send_message(chat_id=u['user_id'], text=message.text)
-            count += 1
-            await asyncio.sleep(0.05)
-        except: pass
-    await message.answer(f"Xabar *{count}* ta foydalanuvchiga muvaffaqiyatli yuborildi.", reply_markup=admin_menu_kb())
+@dp.message(Broadcast.photo)
+async def bc_photo(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish": 
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=admin_menu_kb())
+        return
+    if msg.photo:
+        await state.update_data(bc_photo=msg.photo[-1].file_id)
+    else:
+        await state.update_data(bc_photo=None)
+    await msg.answer("📝 Xabar matnini yozing:", reply_markup=cancel_kb())
+    await state.set_state(Broadcast.text)
+
+@dp.message(Broadcast.text)
+async def bc_text(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish": 
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=admin_menu_kb())
+        return
+    d = await state.get_data()
+    text = msg.text.strip()
+    photo = d.get("bc_photo")
     await state.clear()
+    
+    uids = await all_user_ids()
+    sent = 0
+    for uid in uids:
+        try:
+            if photo: 
+                await bot.send_photo(uid, photo, caption=text)
+            else:     
+                await bot.send_message(uid, text)
+            sent += 1
+        except: pass
+        await asyncio.sleep(0.05)
+    await msg.answer(f"✅ Xabar *{sent}/{len(uids)}* ta foydalanuvchiga yuborildi!", reply_markup=admin_menu_kb())
 
 # ========================================================
 # STARTUP ENTRY
