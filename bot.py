@@ -38,6 +38,9 @@ deposits     = mdb["deposits"]
 orders       = mdb["orders"]
 trades       = mdb["trades"]
 sales        = mdb["sales"]
+suggestions  = mdb["suggestions"]
+ads          = mdb["ads"]
+cooldowns    = mdb["cooldowns"]
 
 async def init_indexes():
     await users.create_index("user_id", unique=True)
@@ -45,6 +48,9 @@ async def init_indexes():
     await orders.create_index("user_id")
     await trades.create_index([("user_id", 1), ("status", 1)])
     await sales.create_index([("user_id", 1), ("status", 1)])
+    await suggestions.create_index("user_id")
+    await ads.create_index("user_id")
+    await cooldowns.create_index([("user_id", 1), ("action", 1)], unique=True)
 
 # ═══════════════════════════════════════════════════════
 # HELPERS
@@ -91,6 +97,33 @@ async def users_count():
 
 async def all_user_ids():
     return [u["user_id"] async for u in users.find({}, {"user_id": 1})]
+
+async def check_cooldown(uid: int, action: str) -> bool:
+    """True = ruxsat (cooldown o'tgan), False = hali kutish kerak."""
+    from datetime import datetime as dt
+    now_ts = dt.now().timestamp()
+    rec = await cooldowns.find_one({"user_id": uid, "action": action})
+    if rec:
+        last = rec.get("last_at", 0)
+        if now_ts - last < 86400:  # 24 soat
+            return False
+    await cooldowns.update_one(
+        {"user_id": uid, "action": action},
+        {"$set": {"last_at": now_ts}},
+        upsert=True
+    )
+    return True
+
+async def cooldown_remaining(uid: int, action: str) -> str:
+    from datetime import datetime as dt
+    rec = await cooldowns.find_one({"user_id": uid, "action": action})
+    if not rec:
+        return "0"
+    elapsed = dt.now().timestamp() - rec.get("last_at", 0)
+    remaining = max(0, 86400 - elapsed)
+    h = int(remaining // 3600)
+    m = int((remaining % 3600) // 60)
+    return f"{h} soat {m} daqiqa"
 
 # deposits
 async def add_deposit(uid, uname, nick, amount, photo_id):
@@ -244,6 +277,18 @@ class Broadcast(StatesGroup):
 class AdminCmd(StatesGroup):
     add_balance = State()
 
+class ContactAdmin(StatesGroup):
+    photo   = State()
+    message = State()
+
+class SuggestBot(StatesGroup):
+    photo   = State()
+    message = State()
+
+class AdFlow(StatesGroup):
+    photo = State()
+    bio   = State()
+
 # ═══════════════════════════════════════════════════════
 # BOT + DP
 # ═══════════════════════════════════════════════════════
@@ -272,7 +317,10 @@ def main_kb():
     b.button(text="➕ Sotish qo'shish")
     b.button(text="💬 Chat")
     b.button(text="📜 Shartnoma qilish")
-    b.adjust(2, 2, 2, 2, 1)
+    b.button(text="📣 Reklama qilish")
+    b.button(text="🛡 Adminlik xizmati")
+    b.button(text="💡 Taklif berish")
+    b.adjust(2, 2, 2, 2, 1, 2)
     return b.as_markup(resize_keyboard=True)
 
 def cancel_kb():
@@ -722,8 +770,12 @@ async def cb_buy_confirm(cb: types.CallbackQuery, state: FSMContext):
         pass
     await state.clear()
     await cb.message.answer(
-        f"✅ So'rovingiz yuborildi!\n\n"
-        f"⏳ Admin tasdiqini kuting, ungacha dam olib turing.\n📋 Buyurtma #{short_id(oid)}",
+        f"✅ *Buyurtmangiz qabul qilindi!*\n\n"
+        f"🪙 Robux: *{robux}*\n"
+        f"💵 To'langan: *{price:,} so'm*\n"
+        f"🎮 Nik: `{esc_md(nick)}`\n"
+        f"📋 Buyurtma #{short_id(oid)}\n\n"
+        f"⏳ Admin javobini kuting. Uxlab turing 😄 tez bajariladi!",
         reply_markup=main_kb()
     )
     await cb.answer()
@@ -784,9 +836,14 @@ async def cmd_trades(msg: types.Message, state: FSMContext):
 async def _send_trade_page(target, items, page, is_cb=True):
     t       = items[page]
     caption = (
-        f"🔄 *Trade #{short_id(t['_id'])}* [{page+1}/{len(items)}]\n\n"
-        f"👤 @{esc_md(t.get('username', '-'))}\n"
-        f"📦 *{esc_md(t['name'])}*\n📝 {esc_md(t.get('bio') or '-')}\n📅 {t['created_at']}"
+        f"🔄 *TRADE E'LON #{short_id(t['_id'])}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"[{page+1}/{len(items)}]\n\n"
+        f"👤 Foydalanuvchi: @{esc_md(t.get('username', '-'))}\n\n"
+        f"📦 *Nomi:*\n{esc_md(t['name'])}\n\n"
+        f"📝 *Tavsif:*\n{esc_md(t.get('bio') or '—')}\n\n"
+        f"📅 Sana: {t['created_at']}\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
     )
     b = InlineKeyboardBuilder()
     if page > 0:
@@ -941,9 +998,15 @@ async def cmd_sales(msg: types.Message, state: FSMContext):
 async def _send_sale_page(target, items, page, is_cb=True):
     s       = items[page]
     caption = (
-        f"🛍 *Sotuv #{short_id(s['_id'])}* [{page+1}/{len(items)}]\n\n"
-        f"👤 @{esc_md(s.get('username', '-'))}\n"
-        f"📦 *{esc_md(s['name'])}*\n📝 {esc_md(s.get('bio') or '-')}\n💰 {s['price']:,} {s['currency']}\n📅 {s['created_at']}"
+        f"🛍 *SOTUV E'LON #{short_id(s['_id'])}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"[{page+1}/{len(items)}]\n\n"
+        f"👤 Foydalanuvchi: @{esc_md(s.get('username', '-'))}\n\n"
+        f"📦 *Nomi:*\n{esc_md(s['name'])}\n\n"
+        f"📝 *Tavsif:*\n{esc_md(s.get('bio') or '—')}\n\n"
+        f"💰 *Narxi:* {s['price']:,} {s['currency']}\n\n"
+        f"📅 Sana: {s['created_at']}\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
     )
     b = InlineKeyboardBuilder()
     if page > 0:
@@ -1135,19 +1198,43 @@ async def cmd_contract(msg: types.Message, state: FSMContext):
         return
     b = InlineKeyboardBuilder()
     b.button(text="✉️ Adminga xabar yuborish", callback_data="send_admin_msg")
+    b.adjust(1)
     await msg.answer(
         "📜 *Shartnoma qilish*\n\n"
-        "👤 Admin: @zuko_help\n"
-        "💬 Nima xizmat?\n\n"
-        "Quyidagi tugma orqali to'g'ridan-to'g'ri adminga xabar yuborishingiz mumkin.",
+        "👤 Admin: @notalonet\n\n"
+        "💬 Admin bilan shartnoma asosida ishlash uchun quyidagi tugmani bosing.\n"
+        "📸 Rasm ham yuborishingiz mumkin (ixtiyoriy).\n"
+        "⏰ 24 soatda 1 marta xabar yuborish mumkin.",
         reply_markup=b.as_markup()
     )
 
 @dp.callback_query(F.data == "send_admin_msg")
 async def cb_send_admin_msg(cb: types.CallbackQuery, state: FSMContext):
-    await cb.message.answer("✍️ Xabaringizni yozing:", reply_markup=cancel_kb())
-    await state.set_state(ContactAdmin.message)
+    uid = cb.from_user.id
+    ok = await check_cooldown(uid, "contract")
+    if not ok:
+        rem = await cooldown_remaining(uid, "contract")
+        await cb.answer(f"⏰ 24 soatda 1 marta yozsa bo'ladi!\n{rem} kutib turing.", show_alert=True)
+        return
+    await cb.message.answer("📸 Rasm yuboring (ixtiyoriy, o'tkazib yuborish mumkin):", reply_markup=skip_cancel_kb())
+    await state.set_state(ContactAdmin.photo)
     await cb.answer()
+
+@dp.message(ContactAdmin.photo, F.photo)
+async def contact_photo(msg: types.Message, state: FSMContext):
+    await state.update_data(ca_photo=msg.photo[-1].file_id)
+    await msg.answer("✍️ Xabaringizni yozing:", reply_markup=cancel_kb())
+    await state.set_state(ContactAdmin.message)
+
+@dp.message(ContactAdmin.photo)
+async def contact_no_photo(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    await state.update_data(ca_photo=None)
+    await msg.answer("✍️ Xabaringizni yozing:", reply_markup=cancel_kb())
+    await state.set_state(ContactAdmin.message)
 
 @dp.message(ContactAdmin.message)
 async def contact_admin_text(msg: types.Message, state: FSMContext):
@@ -1158,19 +1245,224 @@ async def contact_admin_text(msg: types.Message, state: FSMContext):
     uid   = msg.from_user.id
     uname = msg.from_user.username or "-"
     fname = msg.from_user.full_name
+    d     = await state.get_data()
+    photo = d.get("ca_photo")
     text = (
-        f"📨 *Yangi xabar (Shartnoma)*\n\n"
+        f"📜 *Yangi xabar (Shartnoma)*\n\n"
         f"👤 Ism: {esc_md(fname)}\n"
         f"🔗 Username: @{esc_md(uname)}\n"
         f"🆔 ID: `{uid}`\n\n"
         f"💬 Xabar:\n{esc_md(msg.text)}"
     )
     try:
-        await bot.send_message(ADMIN_ID, text)
+        if photo:
+            await bot.send_photo(ADMIN_ID, photo, caption=text)
+        else:
+            await bot.send_message(ADMIN_ID, text)
     except Exception:
         pass
     await state.clear()
-    await msg.answer("✅ Xabaringiz adminga yuborildi! Tez orada javob beriladi.", reply_markup=main_kb())
+    await msg.answer("✅ Xabaringiz @notalonet ga yuborildi! Tez orada javob beriladi.", reply_markup=main_kb())
+
+# ═══════════════════════════════════════════════════════
+# ADMINLIK XIZMATI
+# ═══════════════════════════════════════════════════════
+@dp.message(F.text == "🛡 Adminlik xizmati")
+async def cmd_admin_service(msg: types.Message, state: FSMContext):
+    if not await check_access(msg, state):
+        return
+    b = InlineKeyboardBuilder()
+    b.button(text="📩 Adminga yozish", url=f"https://t.me/notalonet")
+    b.adjust(1)
+    await msg.answer(
+        "🛡 *Adminlik xizmati*\n\n"
+        "👤 Admin: @notalonet\n\n"
+        "Adminlik xizmati uchun to'g'ridan-to'g'ri adminga murojaat qiling.\n"
+        "Quyidagi tugmani bosib admin lichkasiga o'ting:",
+        reply_markup=b.as_markup()
+    )
+
+# ═══════════════════════════════════════════════════════
+# TAKLIF BERISH
+# ═══════════════════════════════════════════════════════
+@dp.message(F.text == "💡 Taklif berish")
+async def cmd_suggest(msg: types.Message, state: FSMContext):
+    if not await check_access(msg, state):
+        return
+    await msg.answer(
+        "💡 *Bot uchun taklif berish*\n\n"
+        "❓ Bu bo'limda bot qanday qilsa yaxshi bo'ladi?\n"
+        "Qanday narsalar qo'shaylik botga?\n\n"
+        "📸 Rasm ham tashlasangiz bo'ladi (ixtiyoriy).\n"
+        "⏭ O'tkazib yuborish ham mumkin.\n"
+        "⏰ 24 soatda 1 marta taklif berish mumkin.\n\n"
+        "Shularni yozib qoldiring 👇",
+        reply_markup=skip_cancel_kb()
+    )
+    await state.set_state(SuggestBot.photo)
+
+@dp.message(SuggestBot.photo, F.photo)
+async def suggest_photo(msg: types.Message, state: FSMContext):
+    await state.update_data(sg_photo=msg.photo[-1].file_id)
+    await msg.answer("✍️ Taklifingizni yozing:", reply_markup=cancel_kb())
+    await state.set_state(SuggestBot.message)
+
+@dp.message(SuggestBot.photo)
+async def suggest_no_photo(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    await state.update_data(sg_photo=None)
+    if msg.text == "⏭ O'tkazib yuborish":
+        await msg.answer("✍️ Taklifingizni yozing:", reply_markup=cancel_kb())
+        await state.set_state(SuggestBot.message)
+        return
+    # Matn ham kiritilgan bo'lsa to'g'ridan yuborib yuboramiz
+    await state.update_data(sg_photo=None)
+    await msg.answer("✍️ Taklifingizni yozing:", reply_markup=cancel_kb())
+    await state.set_state(SuggestBot.message)
+
+@dp.message(SuggestBot.message)
+async def suggest_message(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    uid   = msg.from_user.id
+    uname = msg.from_user.username or "-"
+    fname = msg.from_user.full_name
+    ok = await check_cooldown(uid, "suggest")
+    if not ok:
+        rem = await cooldown_remaining(uid, "suggest")
+        await state.clear()
+        await msg.answer(f"⏰ 24 soatda 1 marta taklif bersa bo'ladi!\n{rem} kutib turing.", reply_markup=main_kb())
+        return
+    d     = await state.get_data()
+    photo = d.get("sg_photo")
+    text = (
+        f"💡 *Yangi taklif*\n\n"
+        f"👤 Ism: {esc_md(fname)}\n"
+        f"🔗 Username: @{esc_md(uname)}\n"
+        f"🆔 ID: `{uid}`\n\n"
+        f"💬 Taklif:\n{esc_md(msg.text)}"
+    )
+    try:
+        if photo:
+            await bot.send_photo(ADMIN_ID, photo, caption=text)
+        else:
+            await bot.send_message(ADMIN_ID, text)
+    except Exception:
+        pass
+    await state.clear()
+    await msg.answer(
+        "✅ *Rahmat! Fikringiz e'tiborsiz qolmaydi* 🙏\n\n"
+        "Taklifingiz adminimizga yuborildi!",
+        reply_markup=main_kb()
+    )
+
+# ═══════════════════════════════════════════════════════
+# REKLAMA QILISH
+# ═══════════════════════════════════════════════════════
+AD_PRICE = 5000  # so'm
+
+@dp.message(F.text == "📣 Reklama qilish")
+async def cmd_ad(msg: types.Message, state: FSMContext):
+    if not await check_access(msg, state):
+        return
+    uid = msg.from_user.id
+    bal = await get_balance(uid)
+    b = InlineKeyboardBuilder()
+    b.button(text="📣 Reklama berish", callback_data="ad_start")
+    b.adjust(1)
+    await msg.answer(
+        f"📣 *Reklama qilish*\n\n"
+        f"💰 Reklama narxi: *{AD_PRICE:,} so'm*\n"
+        f"👛 Sizning balansingiz: *{bal:,} so'm*\n\n"
+        f"Reklamangiz barcha bot foydalanuvchilariga yuboriladi!\n"
+        f"📸 Rasm + bio shaklida chiqadi.\n\n"
+        f"Reklama berish uchun tugmani bosing:",
+        reply_markup=b.as_markup()
+    )
+
+@dp.callback_query(F.data == "ad_start")
+async def cb_ad_start(cb: types.CallbackQuery, state: FSMContext):
+    uid = cb.from_user.id
+    bal = await get_balance(uid)
+    if bal < AD_PRICE:
+        await cb.answer(
+            f"❌ Hisobingiz yetarli emas!\nKerak: {AD_PRICE:,} so'm\nBalans: {bal:,} so'm\n\nAvval hisob to'ldiring.",
+            show_alert=True
+        )
+        return
+    await cb.message.answer("📸 Reklama uchun rasm yuboring:", reply_markup=cancel_kb())
+    await state.set_state(AdFlow.photo)
+    await cb.answer()
+
+@dp.message(AdFlow.photo, F.photo)
+async def ad_photo(msg: types.Message, state: FSMContext):
+    await state.update_data(ad_photo=msg.photo[-1].file_id)
+    await msg.answer(
+        "📝 Reklama matnini (bio) yozing:\n\n"
+        "Masalan: Firma nomi, narxlar, link yoki aloqa.",
+        reply_markup=cancel_kb()
+    )
+    await state.set_state(AdFlow.bio)
+
+@dp.message(AdFlow.photo)
+async def ad_no_photo(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    await msg.answer("❌ Iltimos rasm yuboring:")
+
+@dp.message(AdFlow.bio)
+async def ad_bio(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    uid   = msg.from_user.id
+    uname = msg.from_user.username or "user"
+    d     = await state.get_data()
+    photo = d.get("ad_photo")
+    bio   = msg.text.strip()
+    # Balansdan ayirish
+    bal = await get_balance(uid)
+    if bal < AD_PRICE:
+        await state.clear()
+        await msg.answer("❌ Hisobingiz yetarli emas!", reply_markup=main_kb())
+        return
+    await sub_balance(uid, AD_PRICE)
+    await state.clear()
+    # Hammaga yuborish
+    uids = await all_user_ids()
+    sent = 0
+    ad_caption = f"📣 *REKLAMA*\n\n{esc_md(bio)}"
+    for u_id in uids:
+        try:
+            await bot.send_photo(u_id, photo, caption=ad_caption)
+            sent += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+    # Adminga ham xabar
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"📣 *Yangi reklama*\n\n"
+            f"👤 @{esc_md(uname)} (`{uid}`)\n"
+            f"💰 To'langan: {AD_PRICE:,} so'm\n"
+            f"📤 Yuborildi: {sent}/{len(uids)} ta foydalanuvchiga"
+        )
+    except Exception:
+        pass
+    await msg.answer(
+        f"✅ Reklamangiz *{sent}* ta foydalanuvchiga yuborildi!\n"
+        f"💰 Hisobingizdan {AD_PRICE:,} so'm yechildi.",
+        reply_markup=main_kb()
+    )
 
 # ═══════════════════════════════════════════════════════
 # ADMIN PANEL
