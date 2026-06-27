@@ -41,6 +41,7 @@ sales        = mdb["sales"]
 suggestions  = mdb["suggestions"]
 ads          = mdb["ads"]
 cooldowns    = mdb["cooldowns"]
+autoxabar_db = mdb["autoxabar"]   # autoxabar sozlamalari
 
 async def init_indexes():
     await users.create_index("user_id", unique=True)
@@ -289,6 +290,11 @@ class AdFlow(StatesGroup):
     photo = State()
     bio   = State()
 
+class AutoxabarFlow(StatesGroup):
+    photo        = State()   # 1-bo'lim: rasm yoki o'tkazib yuborish
+    text         = State()   # 1-bo'lim: reklama matni
+    confirm_edit = State()   # tahrirlash uchun
+
 # ═══════════════════════════════════════════════════════
 # BOT + DP
 # ═══════════════════════════════════════════════════════
@@ -320,7 +326,8 @@ def main_kb():
     b.button(text="📣 Reklama qilish")
     b.button(text="🛡 Adminlik xizmati")
     b.button(text="💡 Taklif berish")
-    b.adjust(2, 2, 2, 2, 1, 2)
+    b.button(text="📢 Autoxabar")
+    b.adjust(2, 2, 2, 2, 1, 2, 1)
     return b.as_markup(resize_keyboard=True)
 
 def cancel_kb():
@@ -1462,6 +1469,370 @@ async def ad_bio(msg: types.Message, state: FSMContext):
         f"✅ Reklamangiz *{sent}* ta foydalanuvchiga yuborildi!\n"
         f"💰 Hisobingizdan {AD_PRICE:,} so'm yechildi.",
         reply_markup=main_kb()
+    )
+
+# ═══════════════════════════════════════════════════════
+# AUTOXABAR BO'LIMI
+# ═══════════════════════════════════════════════════════
+
+# --- Autoxabar yordamchi funksiyalar ---
+async def ax_get(uid: int) -> dict:
+    """Foydalanuvchining autoxabar sozlamalarini olish."""
+    doc = await autoxabar_db.find_one({"user_id": uid})
+    if not doc:
+        doc = {
+            "user_id": uid,
+            "photo": None,
+            "text": None,
+            "running": False,
+            "interval": 5,      # daqiqada
+            "groups": [],       # tanlangan guruhlar
+            "all_groups": []    # bot bilgan guruhlar
+        }
+        await autoxabar_db.insert_one(doc)
+    return doc
+
+async def ax_set(uid: int, **kwargs):
+    await autoxabar_db.update_one({"user_id": uid}, {"$set": kwargs}, upsert=True)
+
+# Faol yuborish tasklari (xotirada)
+_ax_tasks: dict[int, asyncio.Task] = {}
+
+async def _ax_sender(uid: int):
+    """Foydalanuvchi tanlagan guruhlarga xabar yuborish sikli."""
+    while True:
+        doc = await ax_get(uid)
+        if not doc.get("running"):
+            break
+        interval = doc.get("interval", 5) * 60
+        groups   = doc.get("groups", [])
+        photo    = doc.get("photo")
+        text     = doc.get("text", "")
+        for chat_id in groups:
+            try:
+                if photo:
+                    await bot.send_photo(chat_id, photo, caption=text)
+                else:
+                    await bot.send_message(chat_id, text)
+            except Exception as e:
+                logging.warning(f"Autoxabar yuborishda xato ({chat_id}): {e}")
+            await asyncio.sleep(1)
+        await asyncio.sleep(interval)
+
+def _ax_start_task(uid: int):
+    if uid in _ax_tasks and not _ax_tasks[uid].done():
+        return
+    task = asyncio.create_task(_ax_sender(uid))
+    _ax_tasks[uid] = task
+
+def _ax_stop_task(uid: int):
+    if uid in _ax_tasks:
+        _ax_tasks[uid].cancel()
+        del _ax_tasks[uid]
+
+# --- Autoxabar klaviaturalari ---
+def ax_main_kb():
+    b = InlineKeyboardBuilder()
+    b.button(text="✏️ Reklama yozish",          callback_data="ax_write")
+    b.button(text="▶️ Xabar yuborishni boshlash", callback_data="ax_toggle")
+    b.button(text="👥 Guruhlar",                  callback_data="ax_groups")
+    b.button(text="⏱ Vaqtni sozlash",             callback_data="ax_time")
+    b.adjust(1)
+    return b.as_markup()
+
+def ax_time_kb(current: int):
+    options = [5, 4, 3, 2, 1]
+    b = InlineKeyboardBuilder()
+    for m in options:
+        mark = "✅ " if m == current else ""
+        b.button(text=f"{mark}{m} daqiqa", callback_data=f"axtime_{m}")
+    b.button(text="🔢 Boshqa vaqt", callback_data="axtime_custom")
+    b.button(text="🔙 Orqaga",      callback_data="ax_back")
+    b.adjust(1)
+    return b.as_markup()
+
+def ax_groups_kb(all_groups: list, selected: list):
+    b = InlineKeyboardBuilder()
+    for g in all_groups:
+        gid   = g["id"]
+        gname = g.get("title", str(gid))
+        mark  = "✅ " if gid in selected else "❌ "
+        b.button(text=f"{mark}{gname}", callback_data=f"axgrp_{gid}")
+    b.button(text="🔙 Orqaga", callback_data="ax_back")
+    b.adjust(1)
+    return b.as_markup()
+
+# --- Bot guruhga qo'shilganda ro'yxatga olish ---
+@dp.my_chat_member()
+async def on_chat_member_update(event: types.ChatMemberUpdated):
+    """Bot guruhga qo'shilsa yoki chiqarilsa qayd qilish."""
+    chat = event.chat
+    if chat.type not in ("group", "supergroup"):
+        return
+    new_status = event.new_chat_member.status
+    if new_status in ("member", "administrator"):
+        # Guruhni ro'yxatga qo'sh (hamma adminlar uchun)
+        await autoxabar_db.update_many(
+            {},
+            {"$addToSet": {"all_groups": {"id": chat.id, "title": chat.title or str(chat.id)}}}
+        )
+    elif new_status in ("left", "kicked", "banned", "restricted"):
+        # Guruhni o'chir
+        await autoxabar_db.update_many(
+            {},
+            {
+                "$pull": {
+                    "all_groups": {"id": chat.id},
+                    "groups": chat.id
+                }
+            }
+        )
+
+# --- Asosiy autoxabar menyusi ---
+@dp.message(F.text == "📢 Autoxabar")
+async def cmd_autoxabar(msg: types.Message, state: FSMContext):
+    if not await check_access(msg, state):
+        return
+    uid = msg.from_user.id
+    doc = await ax_get(uid)
+    status = "▶️ Ishlamoqda" if doc.get("running") else "⏹ To'xtatilgan"
+    reklama = doc.get("text") or "Yo'q"
+    interval = doc.get("interval", 5)
+    groups_count = len(doc.get("groups", []))
+    await msg.answer(
+        f"📢 *Autoxabar*\n\n"
+        f"📊 Holat: *{status}*\n"
+        f"⏱ Interval: *{interval} daqiqa*\n"
+        f"👥 Guruhlar: *{groups_count} ta*\n"
+        f"📝 Reklama: _{esc_md(reklama[:50])}{'...' if len(reklama) > 50 else ''}_\n\n"
+        f"Quyidagi bo'limlardan birini tanlang:",
+        reply_markup=ax_main_kb()
+    )
+
+@dp.callback_query(F.data == "ax_back")
+async def ax_back(cb: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    uid = cb.from_user.id
+    doc = await ax_get(uid)
+    status = "▶️ Ishlamoqda" if doc.get("running") else "⏹ To'xtatilgan"
+    interval = doc.get("interval", 5)
+    reklama  = doc.get("text") or "Yo'q"
+    groups_count = len(doc.get("groups", []))
+    await cb.message.edit_text(
+        f"📢 *Autoxabar*\n\n"
+        f"📊 Holat: *{status}*\n"
+        f"⏱ Interval: *{interval} daqiqa*\n"
+        f"👥 Guruhlar: *{groups_count} ta*\n"
+        f"📝 Reklama: _{esc_md(reklama[:50])}{'...' if len(reklama) > 50 else ''}_\n\n"
+        f"Quyidagi bo'limlardan birini tanlang:",
+        reply_markup=ax_main_kb()
+    )
+    await cb.answer()
+
+# --- 1-bo'lim: Reklama yozish ---
+@dp.callback_query(F.data == "ax_write")
+async def ax_write(cb: types.CallbackQuery, state: FSMContext):
+    await cb.message.answer(
+        "📸 *Reklama rasmi*\n\nRasm yuboring yoki o'tkazib yuboring (rasmsiz ham bo'ladi):",
+        reply_markup=skip_cancel_kb()
+    )
+    await state.set_state(AutoxabarFlow.photo)
+    await cb.answer()
+
+@dp.message(AutoxabarFlow.photo, F.photo)
+async def ax_photo_recv(msg: types.Message, state: FSMContext):
+    await state.update_data(ax_photo=msg.photo[-1].file_id)
+    await msg.answer("📝 Reklama matnini yozing:", reply_markup=cancel_kb())
+    await state.set_state(AutoxabarFlow.text)
+
+@dp.message(AutoxabarFlow.photo)
+async def ax_photo_skip(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    if msg.text == "⏭ O'tkazib yuborish":
+        await state.update_data(ax_photo=None)
+        await msg.answer("📝 Reklama matnini yozing:", reply_markup=cancel_kb())
+        await state.set_state(AutoxabarFlow.text)
+        return
+    await msg.answer("❌ Rasm yuboring yoki *O'tkazib yuborish* tugmasini bosing:")
+
+@dp.message(AutoxabarFlow.text)
+async def ax_text_recv(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    uid   = msg.from_user.id
+    d     = await state.get_data()
+    photo = d.get("ax_photo")
+    text  = msg.text.strip()
+    await ax_set(uid, photo=photo, text=text)
+    await state.clear()
+    # Ko'rsatish
+    b = InlineKeyboardBuilder()
+    b.button(text="✏️ Tahrirlash", callback_data="ax_write")
+    b.button(text="🔙 Orqaga",     callback_data="ax_back")
+    b.adjust(1)
+    preview = f"📣 *Reklama saqlandi!*\n\n📝 Matn: _{esc_md(text[:100])}_"
+    if photo:
+        await msg.answer_photo(photo, caption=preview, reply_markup=b.as_markup())
+    else:
+        await msg.answer(preview, reply_markup=b.as_markup())
+
+# --- 2-bo'lim: Xabar yuborishni boshlash/to'xtatish ---
+@dp.callback_query(F.data == "ax_toggle")
+async def ax_toggle(cb: types.CallbackQuery):
+    uid = cb.from_user.id
+    doc = await ax_get(uid)
+    if not doc.get("text"):
+        await cb.answer("❌ Avval reklama yozing! (1-bo'lim)", show_alert=True)
+        return
+    if not doc.get("groups"):
+        await cb.answer("❌ Avval guruhlarni tanlang! (3-bo'lim)", show_alert=True)
+        return
+    running = doc.get("running", False)
+    if running:
+        # To'xtatish
+        await ax_set(uid, running=False)
+        _ax_stop_task(uid)
+        await cb.answer("⏹ Autoxabar to'xtatildi!", show_alert=True)
+    else:
+        # Boshlash
+        await ax_set(uid, running=True)
+        _ax_start_task(uid)
+        await cb.answer("▶️ Autoxabar boshlandi!", show_alert=True)
+    # Menyuni yangilash
+    doc = await ax_get(uid)
+    status = "▶️ Ishlamoqda" if doc.get("running") else "⏹ To'xtatilgan"
+    interval = doc.get("interval", 5)
+    reklama  = doc.get("text") or "Yo'q"
+    groups_count = len(doc.get("groups", []))
+    try:
+        await cb.message.edit_text(
+            f"📢 *Autoxabar*\n\n"
+            f"📊 Holat: *{status}*\n"
+            f"⏱ Interval: *{interval} daqiqa*\n"
+            f"👥 Guruhlar: *{groups_count} ta*\n"
+            f"📝 Reklama: _{esc_md(reklama[:50])}{'...' if len(reklama) > 50 else ''}_\n\n"
+            f"Quyidagi bo'limlardan birini tanlang:",
+            reply_markup=ax_main_kb()
+        )
+    except Exception:
+        pass
+
+# --- 3-bo'lim: Guruhlar ---
+@dp.callback_query(F.data == "ax_groups")
+async def ax_groups(cb: types.CallbackQuery):
+    uid = cb.from_user.id
+    doc = await ax_get(uid)
+    all_groups = doc.get("all_groups", [])
+    selected   = doc.get("groups", [])
+    if not all_groups:
+        await cb.answer(
+            "❌ Hozircha guruhlar yo'q!\n\nBotni guruhlarga qo'shing va u avtomatik ro'yxatga olinadi.",
+            show_alert=True
+        )
+        return
+    await cb.message.edit_text(
+        f"👥 *Guruhlar*\n\n"
+        f"✅ = tanlangan, ❌ = tanlanmagan\n"
+        f"Guruh nomiga bosib tanlang/bekor qiling:\n\n"
+        f"Jami: {len(all_groups)} ta guruh | Tanlangan: {len(selected)} ta",
+        reply_markup=ax_groups_kb(all_groups, selected)
+    )
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("axgrp_"))
+async def ax_group_toggle(cb: types.CallbackQuery):
+    uid  = cb.from_user.id
+    gid  = int(cb.data.split("_")[1])
+    doc  = await ax_get(uid)
+    sel  = doc.get("groups", [])
+    if gid in sel:
+        sel.remove(gid)
+    else:
+        sel.append(gid)
+    await ax_set(uid, groups=sel)
+    # Yangilash
+    doc        = await ax_get(uid)
+    all_groups = doc.get("all_groups", [])
+    selected   = doc.get("groups", [])
+    try:
+        await cb.message.edit_text(
+            f"👥 *Guruhlar*\n\n"
+            f"✅ = tanlangan, ❌ = tanlanmagan\n"
+            f"Guruh nomiga bosib tanlang/bekor qiling:\n\n"
+            f"Jami: {len(all_groups)} ta guruh | Tanlangan: {len(selected)} ta",
+            reply_markup=ax_groups_kb(all_groups, selected)
+        )
+    except Exception:
+        pass
+    await cb.answer()
+
+# --- 4-bo'lim: Vaqt sozlash ---
+@dp.callback_query(F.data == "ax_time")
+async def ax_time(cb: types.CallbackQuery):
+    uid = cb.from_user.id
+    doc = await ax_get(uid)
+    cur = doc.get("interval", 5)
+    await cb.message.edit_text(
+        f"⏱ *Vaqtni sozlash*\n\n"
+        f"Hozirgi interval: *{cur} daqiqa*\n\n"
+        f"Har necha daqiqada xabar yuborilsin?",
+        reply_markup=ax_time_kb(cur)
+    )
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("axtime_"))
+async def ax_time_set(cb: types.CallbackQuery, state: FSMContext):
+    uid  = cb.from_user.id
+    val  = cb.data.split("_")[1]
+    if val == "custom":
+        await cb.message.answer(
+            "🔢 *Boshqa vaqt*\n\n1 dan 1000 gacha daqiqa kiriting:",
+            reply_markup=cancel_kb()
+        )
+        await state.set_state(AutoxabarFlow.confirm_edit)
+        await cb.answer()
+        return
+    minutes = int(val)
+    await ax_set(uid, interval=minutes)
+    doc = await ax_get(uid)
+    cur = doc.get("interval", 5)
+    try:
+        await cb.message.edit_text(
+            f"⏱ *Vaqtni sozlash*\n\n"
+            f"Hozirgi interval: *{cur} daqiqa*\n\n"
+            f"Har necha daqiqada xabar yuborilsin?",
+            reply_markup=ax_time_kb(cur)
+        )
+    except Exception:
+        pass
+    await cb.answer(f"✅ {minutes} daqiqaga o'rnatildi!")
+
+@dp.message(AutoxabarFlow.confirm_edit)
+async def ax_custom_time(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    txt = msg.text.strip()
+    if not txt.isdigit() or not (1 <= int(txt) <= 1000):
+        await msg.answer("❌ 1 dan 1000 gacha son kiriting:")
+        return
+    uid = msg.from_user.id
+    minutes = int(txt)
+    await ax_set(uid, interval=minutes)
+    await state.clear()
+    doc = await ax_get(uid)
+    cur = doc.get("interval", 5)
+    b = InlineKeyboardBuilder()
+    b.button(text="🔙 Orqaga", callback_data="ax_back")
+    await msg.answer(
+        f"✅ Interval *{cur} daqiqa* ga o'rnatildi!",
+        reply_markup=b.as_markup()
     )
 
 # ═══════════════════════════════════════════════════════
