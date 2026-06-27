@@ -23,7 +23,7 @@ BOT_TOKEN        = os.getenv("BOT_TOKEN")
 ADMIN_ID         = int(os.getenv("ADMIN_ID", "0"))
 MONGO_URI        = os.getenv("MONGO_URI")
 REQUIRED_CHANNEL  = os.getenv("CHANNEL", "@bulldrop_n1")
-REQUIRED_CHANNEL2 = os.getenv("CHANNEL2", "@uzb_edits")
+REQUIRED_CHANNEL2 = os.getenv("CHANNEL2", "@uzbekroblox")
 CARD_NUMBER      = os.getenv("CARD_NUMBER", "9860 1234 5678 9012")
 CARD_OWNER       = os.getenv("CARD_OWNER", "ADMIN NOMI")
 CHAT_LINK        = os.getenv("CHAT_LINK", "https://t.me/roblox_uz")
@@ -54,6 +54,17 @@ def now():
 
 def short_id(oid):
     return str(oid)[-6:].upper()
+
+def esc_md(text) -> str:
+    """Telegram legacy Markdown uchun maxsus belgilarni escape qiladi
+    (aks holda foydalanuvchi yuborgan _, *, `, [ belgilari bo'lgan
+    xabarlar 'can't parse entities' xatosi bilan yuborilmay qoladi)."""
+    if text is None:
+        return ""
+    text = str(text)
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, "\\" + ch)
+    return text
 
 async def get_user(uid):
     return await users.find_one({"user_id": uid})
@@ -528,7 +539,7 @@ async def dep_check_photo(msg: types.Message, state: FSMContext):
             ADMIN_ID, photo_id,
             caption=(
                 f"💰 *To'lov #{short_id(did)}*\n\n"
-                f"👤 @{uname} (`{uid}`)\n"
+                f"👤 @{esc_md(uname)} (`{uid}`)\n"
                 f"💵 Miqdor: *{amount:,} so'm*\n🕐 {now()}"
             ),
             reply_markup=b.as_markup()
@@ -659,10 +670,10 @@ async def buy_mood(msg: types.Message, state: FSMContext):
     b.adjust(2)
     await msg.answer(
         f"📋 *Ma'lumotlarni tekshiring*\n\n"
-        f"🎮 Nik: `{d['buy_nick']}`\n"
+        f"🎮 Nik: `{esc_md(d['buy_nick'])}`\n"
         f"🪙 Robux: *{d['buy_robux']}*\n"
         f"💵 Narx: *{d['buy_price']:,} so'm*\n"
-        f"😊 Qalaysiz: {mood}\n\n"
+        f"😊 Qalaysiz: {esc_md(mood)}\n\n"
         f"Hammasi to'g'ri bo'lsa tasdiqlang:",
         reply_markup=b.as_markup()
     )
@@ -700,11 +711,11 @@ async def cb_buy_confirm(cb: types.CallbackQuery, state: FSMContext):
         await bot.send_message(
             ADMIN_ID,
             f"🛒 *Robux buyurtma #{short_id(oid)}*\n\n"
-            f"1️⃣ Nik: `{nick}`\n"
+            f"1️⃣ Nik: `{esc_md(nick)}`\n"
             f"2️⃣ Robux: *{robux}*\n"
             f"3️⃣ Narx: *{price:,} so'm*\n"
-            f"4️⃣ Qalaysiz: {mood}\n\n"
-            f"👤 @{cb.from_user.username or '-'} (`{uid}`)\n🕐 {now()}",
+            f"4️⃣ Qalaysiz: {esc_md(mood)}\n\n"
+            f"👤 @{esc_md(cb.from_user.username or '-')} (`{uid}`)\n🕐 {now()}",
             reply_markup=b.as_markup()
         )
     except Exception:
@@ -774,8 +785,8 @@ async def _send_trade_page(target, items, page, is_cb=True):
     t       = items[page]
     caption = (
         f"🔄 *Trade #{short_id(t['_id'])}* [{page+1}/{len(items)}]\n\n"
-        f"👤 @{t.get('username', '-')}\n"
-        f"📦 *{t['name']}*\n📝 {t.get('bio') or '-'}\n📅 {t['created_at']}"
+        f"👤 @{esc_md(t.get('username', '-'))}\n"
+        f"📦 *{esc_md(t['name'])}*\n📝 {esc_md(t.get('bio') or '-')}\n📅 {t['created_at']}"
     )
     b = InlineKeyboardBuilder()
     if page > 0:
@@ -855,7 +866,7 @@ async def ta_bio(msg: types.Message, state: FSMContext):
     tid = await add_trade(uid, uname, "", d["t_name"], bio, photo_id)
     await state.clear()
     try:
-        cap = f"🔄 Yangi trade #{short_id(tid)}\n👤 @{uname}\n📦 {d['t_name']}\n📝 {bio or '-'}"
+        cap = f"🔄 Yangi trade #{short_id(tid)}\n👤 @{esc_md(uname)}\n📦 {esc_md(d['t_name'])}\n📝 {esc_md(bio or '-')}"
         if photo_id:
             await bot.send_photo(ADMIN_ID, photo_id, caption=cap)
         else:
@@ -931,8 +942,8 @@ async def _send_sale_page(target, items, page, is_cb=True):
     s       = items[page]
     caption = (
         f"🛍 *Sotuv #{short_id(s['_id'])}* [{page+1}/{len(items)}]\n\n"
-        f"👤 @{s.get('username', '-')}\n"
-        f"📦 *{s['name']}*\n📝 {s.get('bio') or '-'}\n💰 {s['price']:,} {s['currency']}\n📅 {s['created_at']}"
+        f"👤 @{esc_md(s.get('username', '-'))}\n"
+        f"📦 *{esc_md(s['name'])}*\n📝 {esc_md(s.get('bio') or '-')}\n💰 {s['price']:,} {s['currency']}\n📅 {s['created_at']}"
     )
     b = InlineKeyboardBuilder()
     if page > 0:
@@ -1038,7 +1049,7 @@ async def sa_price(msg: types.Message, state: FSMContext):
     sid   = await add_sale(uid, uname, "", d["s_name"], bio, d.get("s_photo"), d["s_currency"], int(txt))
     await state.clear()
     try:
-        cap = f"🛍 Yangi sotuv #{short_id(sid)}\n👤 @{uname}\n📦 {d['s_name']}\n📝 {bio or '-'}\n💰 {int(txt):,} {d['s_currency']}"
+        cap = f"🛍 Yangi sotuv #{short_id(sid)}\n👤 @{esc_md(uname)}\n📦 {esc_md(d['s_name'])}\n📝 {esc_md(bio or '-')}\n💰 {int(txt):,} {d['s_currency']}"
         if d.get("s_photo"):
             await bot.send_photo(ADMIN_ID, d["s_photo"], caption=cap)
         else:
@@ -1149,10 +1160,10 @@ async def contact_admin_text(msg: types.Message, state: FSMContext):
     fname = msg.from_user.full_name
     text = (
         f"📨 *Yangi xabar (Shartnoma)*\n\n"
-        f"👤 Ism: {fname}\n"
-        f"🔗 Username: @{uname}\n"
+        f"👤 Ism: {esc_md(fname)}\n"
+        f"🔗 Username: @{esc_md(uname)}\n"
         f"🆔 ID: `{uid}`\n\n"
-        f"💬 Xabar:\n{msg.text}"
+        f"💬 Xabar:\n{esc_md(msg.text)}"
     )
     try:
         await bot.send_message(ADMIN_ID, text)
@@ -1201,7 +1212,7 @@ async def adm_ord(cb: types.CallbackQuery):
         b.button(text="❌ Rad etish", callback_data=f"ono_{o['_id']}")
         b.adjust(2)
         await cb.message.answer(
-            f"🛒 *Buyurtma #{short_id(o['_id'])}*\n👤 @{o['username']}\n"
+            f"🛒 *Buyurtma #{short_id(o['_id'])}*\n👤 @{esc_md(o['username'])}\n"
             f"🎮 Nik: `{o.get('roblox_nick','-')}`\n"
             f"🪙 {o['robux_amount']} Robux — {o['price_sum']:,} so'm\n"
             f"😊 Qalaysiz: {o.get('mood','-')}\n🕐 {o['created_at']}",
@@ -1222,7 +1233,7 @@ async def adm_tr(cb: types.CallbackQuery):
         b.button(text="✏️ Tahrirlash", callback_data=f"etrade_{t['_id']}")
         b.button(text="🗑 O'chirish",  callback_data=f"dtrade_{t['_id']}")
         b.adjust(2)
-        caption = f"🔄 *#{short_id(t['_id'])}* {t['name']}\n👤 @{t.get('username','-')}\n📝 {t['bio']}"
+        caption = f"🔄 *#{short_id(t['_id'])}* {esc_md(t['name'])}\n👤 @{esc_md(t.get('username','-'))}\n📝 {esc_md(t['bio'])}"
         if t.get("photo_id"):
             await cb.message.answer_photo(t["photo_id"], caption=caption, reply_markup=b.as_markup())
         else:
@@ -1242,7 +1253,7 @@ async def adm_sl(cb: types.CallbackQuery):
         b.button(text="✏️ Tahrirlash", callback_data=f"esale_{s['_id']}")
         b.button(text="🗑 O'chirish",  callback_data=f"dsale_{s['_id']}")
         b.adjust(2)
-        caption = f"🛍 *#{short_id(s['_id'])}* {s['name']}\n👤 @{s.get('username','-')}\n📝 {s.get('bio') or '-'}\n💰 {s['price']:,} {s['currency']}"
+        caption = f"🛍 *#{short_id(s['_id'])}* {esc_md(s['name'])}\n👤 @{esc_md(s.get('username','-'))}\n📝 {esc_md(s.get('bio') or '-')}\n💰 {s['price']:,} {s['currency']}"
         if s.get("photo_id"):
             await cb.message.answer_photo(s["photo_id"], caption=caption, reply_markup=b.as_markup())
         else:
