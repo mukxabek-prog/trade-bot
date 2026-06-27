@@ -1,2 +1,4 @@
-aiogram>=3.4,<4.0
-aiohttp>=3.9
+aiogram>=3.0.0
+motor
+dnspython
+python-dotenv
