@@ -5,7 +5,8 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.client.default import DefaultBotProperties  # YANGI IMPORT QO'SHILDI
+from aiogram.fsm.context import FSMContext  # FSM uchun to'g'ri import
+from aiogram.client.default import DefaultBotProperties  # Parse_mode xatosi uchun
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 from dotenv import load_dotenv
@@ -44,7 +45,7 @@ async def init_indexes():
     await sales.create_index([("user_id", 1), ("status", 1)])
 
 # ========================================================
-# BOT INITIALIZATION (XATOLIK SHU YERDA TUZATILDI)
+# BOT INITIALIZATION
 # ========================================================
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp  = Dispatcher(storage=MemoryStorage())
@@ -121,7 +122,7 @@ async def cb_check_sub(callback: types.CallbackQuery):
         await callback.message.answer("Rahmat! Botdan foydalanishingiz mumkin.", reply_markup=main_menu_kb())
         await callback.answer()
     else:
-        await callback.answer("Siz hali a'zo bo'lmadingiz!", show_alert=True)
+        await callback.answer("Siz hali a'zo bo'lmadinigz!", show_alert=True)
 
 @dp.message(F.text == "👤 Profil")
 async def menu_profile(message: types.Message):
@@ -131,12 +132,12 @@ async def menu_profile(message: types.Message):
     await message.answer(text)
 
 @dp.message(F.text == "💰 Balans to'ldirish")
-async def menu_deposit(message: types.Message, state: asyncio.subprocess.Process):
+async def menu_deposit(message: types.Message, state: FSMContext):
     await message.answer("Qancha to'ldirmoqchisiz (so'mda)? Faqat raqam kiriting:")
     await state.set_state(DepositStates.waiting_for_amount)
 
 @dp.message(DepositStates.waiting_for_amount)
-async def deposit_amount(message: types.Message, state: asyncio.subprocess.Process):
+async def deposit_amount(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
         await message.answer("Iltimos, faqat musbat raqam kiriting:")
         return
@@ -148,7 +149,7 @@ async def deposit_amount(message: types.Message, state: asyncio.subprocess.Proce
     await state.set_state(DepositStates.waiting_for_receipt)
 
 @dp.message(DepositStates.waiting_for_receipt, F.photo)
-async def deposit_receipt(message: types.Message, state: asyncio.subprocess.Process):
+async def deposit_receipt(message: types.Message, state: FSMContext):
     data = await state.get_data()
     amount = data['amount']
     photo_id = message.photo[-1].file_id
@@ -235,13 +236,13 @@ async def admin_back(message: types.Message):
     await message.answer("Asosiy menyuga qaytdingiz.", reply_markup=main_menu_kb())
 
 @dp.message(F.text == "📢 Xabar yuborish")
-async def admin_broadcast_start(message: types.Message, state: asyncio.subprocess.Process):
+async def admin_broadcast_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     await message.answer("Barcha foydalanuvchilarga yuboriladigan xabarni kiriting:")
     await state.set_state(AdminStates.waiting_for_broadcast)
 
 @dp.message(AdminStates.waiting_for_broadcast)
-async def admin_broadcast_send(message: types.Message, state: asyncio.subprocess.Process):
+async def admin_broadcast_send(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     cursor = users.find({})
     count = 0
