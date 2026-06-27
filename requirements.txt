@@ -1,4 +1,6 @@
 aiogram==3.7.0
-motor
-dnspython
-python-dotenv
+motor==3.3.2
+pymongo==4.6.1
+python-dotenv==1.0.0
+pydantic==2.5.3
+pydantic-core==2.14.6
