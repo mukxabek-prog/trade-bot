@@ -57,13 +57,11 @@ def short_id(oid):
 async def get_user(uid):
     return await users.find_one({"user_id": uid})
 
-async def upsert_user(uid, uname, nick=None):
+async def upsert_user(uid, uname):
     upd = {
         "$set": {"username": uname, "last_seen": now()},
-        "$setOnInsert": {"user_id": uid, "balance": 0, "total_deposited": 0, "joined": now(), "roblox_nick": ""}
+        "$setOnInsert": {"user_id": uid, "balance": 0, "total_deposited": 0, "joined": now()}
     }
-    if nick:
-        upd["$set"]["roblox_nick"] = nick
     await users.update_one({"user_id": uid}, upd, upsert=True)
 
 async def get_balance(uid):
@@ -195,9 +193,6 @@ DEPOSIT_OPTIONS = [5000, 10000, 15000, 20000, 30000, 50000, 100000]
 # ═══════════════════════════════════════════════════════
 # STATES
 # ═══════════════════════════════════════════════════════
-class Reg(StatesGroup):
-    nick = State()
-
 class Dep(StatesGroup):
     custom_amount = State()
     check_photo   = State()
@@ -285,12 +280,6 @@ async def check_access(msg: types.Message, state: FSMContext) -> bool:
     if not await is_sub(uid):
         await msg.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=sub_kb())
         return False
-    u = await get_user(uid)
-    if not u or not u.get("roblox_nick"):
-        await upsert_user(uid, msg.from_user.username or "user")
-        await msg.answer("📝 Roblox nickingizni yozing:", reply_markup=cancel_kb())
-        await state.set_state(Reg.nick)
-        return False
     return True
 
 async def _send_or_edit(cb: types.CallbackQuery, photo_id, text, markup):
@@ -327,15 +316,11 @@ async def cmd_start(msg: types.Message, state: FSMContext):
         await msg.answer("👋 Salom! Botdan foydalanish uchun avval kanalimizga obuna bo'ling!", reply_markup=sub_kb())
         return
     await upsert_user(uid, msg.from_user.username or "user")
-    u = await get_user(uid)
-    if not u or not u.get("roblox_nick"):
-        await msg.answer("📝 Roblox nickingizni yozing:", reply_markup=cancel_kb())
-        await state.set_state(Reg.nick)
-        return
-    bal = u.get("balance", 0)
+    u   = await get_user(uid)
+    bal = u.get("balance", 0) if u else 0
     await msg.answer(
         f"🌟 *Assalomu alaykum, {msg.from_user.first_name}!*\n\n"
-        f"🎮 Roblox: *{u['roblox_nick']}*\n💰 Balans: *{bal:,} so'm*\n\n"
+        f"💰 Balans: *{bal:,} so'm*\n\n"
         f"👇 Quyidagi menyudan foydalaning:",
         reply_markup=main_kb()
     )
@@ -351,30 +336,8 @@ async def cb_check_sub(cb: types.CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await upsert_user(uid, cb.from_user.username or "user")
-    u = await get_user(uid)
-    if not u or not u.get("roblox_nick"):
-        await cb.message.answer("✅ Obuna tasdiqlandi!\n📝 Roblox nickingizni yozing:", reply_markup=cancel_kb())
-        await state.set_state(Reg.nick)
-        return
     await cb.message.answer("✅ Xush kelibsiz!", reply_markup=main_kb())
     await cb.answer()
-
-# ═══════════════════════════════════════════════════════
-# RO'YXAT (NICK KIRITISH)
-# ═══════════════════════════════════════════════════════
-@dp.message(Reg.nick)
-async def reg_nick(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear()
-        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
-        return
-    nick = msg.text.strip()
-    if not 2 <= len(nick) <= 30:
-        await msg.answer("❌ Nick 2–30 belgi bo'lishi kerak:")
-        return
-    await upsert_user(msg.from_user.id, msg.from_user.username or "user", nick)
-    await state.clear()
-    await msg.answer(f"✅ Ro'yxatdan o'tdingiz!\n🎮 Roblox Nick: *{nick}*", reply_markup=main_kb())
 
 # ═══════════════════════════════════════════════════════
 # PROFIL
@@ -392,24 +355,17 @@ async def cmd_profile(msg: types.Message, state: FSMContext):
         b.button(text=f"🔄 Mening tradelarim ({len(tr)})", callback_data="my_trades_0")
     if sl:
         b.button(text=f"🛍 Mening sotuvlarim ({len(sl)})", callback_data="my_sales_0")
-    b.button(text="✏️ Nickni yangilash", callback_data="upd_nick")
     b.adjust(1)
     await msg.answer(
         f"👤 *Profilingiz*\n\n"
-        f"🎮 Roblox Nick: *{u.get('roblox_nick', '-')}*\n"
+        f"🆔 ID: `{uid}`\n"
         f"💰 Balans: *{u.get('balance', 0):,} so'm*\n"
         f"📈 Jami kiritilgan: *{u.get('total_deposited', 0):,} so'm*\n"
         f"📅 Ro'yxat: {u.get('joined', '-')}\n\n"
         f"🔄 Faol tradelarim: {len(tr)}\n"
         f"🛍 Faol sotuvlarim: {len(sl)}",
-        reply_markup=b.as_markup()
+        reply_markup=b.as_markup() if (tr or sl) else None
     )
-
-@dp.callback_query(F.data == "upd_nick")
-async def cb_upd_nick(cb: types.CallbackQuery, state: FSMContext):
-    await cb.message.answer("🎮 Yangi Roblox nickingizni yozing:", reply_markup=cancel_kb())
-    await state.set_state(Reg.nick)
-    await cb.answer()
 
 @dp.callback_query(F.data.startswith("my_trades_"))
 async def cb_my_trades(cb: types.CallbackQuery):
@@ -541,8 +497,7 @@ async def dep_check_photo(msg: types.Message, state: FSMContext):
     d        = await state.get_data()
     amount   = d.get("dep_amount", 0)
     photo_id = msg.photo[-1].file_id
-    nick     = u.get("roblox_nick", "-") if u else "-"
-    did      = await add_deposit(uid, uname, nick, amount, photo_id)
+    did      = await add_deposit(uid, uname, "", amount, photo_id)
     b = InlineKeyboardBuilder()
     b.button(text="✅ Tasdiqlash", callback_data=f"dok_{did}")
     b.button(text="❌ Rad etish",  callback_data=f"dno_{did}")
@@ -552,7 +507,7 @@ async def dep_check_photo(msg: types.Message, state: FSMContext):
             ADMIN_ID, photo_id,
             caption=(
                 f"💰 *To'lov #{short_id(did)}*\n\n"
-                f"👤 @{uname} (`{uid}`)\n🎮 Roblox: *{nick}*\n"
+                f"👤 @{uname} (`{uid}`)\n"
                 f"💵 Miqdor: *{amount:,} so'm*\n🕐 {now()}"
             ),
             reply_markup=b.as_markup()
@@ -638,7 +593,7 @@ async def cb_buy(cb: types.CallbackQuery):
         await cb.answer("❌ Avval kanalga obuna bo'ling!", show_alert=True)
         return
     u = await get_user(uid)
-    if not u or not u.get("roblox_nick"):
+    if not u:
         await cb.answer("❌ Avval /start yozing!", show_alert=True)
         return
     robux = int(cb.data.split("_")[1])
@@ -651,7 +606,7 @@ async def cb_buy(cb: types.CallbackQuery):
         await cb.answer(f"❌ Balans yetarli emas!\nKerak: {price:,} so'm\nBalans: {bal:,} so'm", show_alert=True)
         return
     await sub_balance(uid, price)
-    oid = await add_order(uid, cb.from_user.username or "user", u["roblox_nick"], robux, price)
+    oid = await add_order(uid, cb.from_user.username or "user", "", robux, price)
     b = InlineKeyboardBuilder()
     b.button(text="✅ Yuborildi", callback_data=f"ook_{oid}")
     b.button(text="❌ Rad etish", callback_data=f"ono_{oid}")
@@ -661,7 +616,6 @@ async def cb_buy(cb: types.CallbackQuery):
             ADMIN_ID,
             f"🛒 *Robux buyurtma #{short_id(oid)}*\n\n"
             f"👤 @{cb.from_user.username or '-'} (`{uid}`)\n"
-            f"🎮 Roblox Nick: *{u['roblox_nick']}*\n"
             f"🪙 Miqdor: *{robux} Robux*\n💵 Narx: *{price:,} so'm*\n🕐 {now()}",
             reply_markup=b.as_markup()
         )
@@ -732,7 +686,7 @@ async def _send_trade_page(target, items, page, is_cb=True):
     t       = items[page]
     caption = (
         f"🔄 *Trade #{short_id(t['_id'])}* [{page+1}/{len(items)}]\n\n"
-        f"🎮 {t.get('roblox_nick', '-')} (@{t.get('username', '-')})\n"
+        f"👤 @{t.get('username', '-')}\n"
         f"📦 *{t['name']}*\n📝 {t['bio']}\n📅 {t['created_at']}"
     )
     b = InlineKeyboardBuilder()
@@ -800,7 +754,7 @@ async def ta_photo(msg: types.Message, state: FSMContext):
     uname    = msg.from_user.username or "user"
     u        = await get_user(uid)
     photo_id = msg.photo[-1].file_id
-    tid = await add_trade(uid, uname, u.get("roblox_nick", ""), d["t_name"], d["t_bio"], photo_id)
+    tid = await add_trade(uid, uname, "", d["t_name"], d["t_bio"], photo_id)
     await state.clear()
     try:
         await bot.send_photo(ADMIN_ID, photo_id, caption=f"🔄 Yangi trade #{short_id(tid)}\n👤 @{uname}\n📦 {d['t_name']}\n📝 {d['t_bio']}")
@@ -817,8 +771,7 @@ async def ta_no_photo(msg: types.Message, state: FSMContext):
     d     = await state.get_data()
     uid   = msg.from_user.id
     uname = msg.from_user.username or "user"
-    u     = await get_user(uid)
-    tid   = await add_trade(uid, uname, u.get("roblox_nick", ""), d["t_name"], d["t_bio"], None)
+    tid   = await add_trade(uid, uname, "", d["t_name"], d["t_bio"], None)
     await state.clear()
     try:
         await bot.send_message(ADMIN_ID, f"🔄 Yangi trade #{short_id(tid)}\n👤 @{uname}\n📦 {d['t_name']}\n📝 {d['t_bio']}")
@@ -893,7 +846,7 @@ async def _send_sale_page(target, items, page, is_cb=True):
     s       = items[page]
     caption = (
         f"🛍 *Sotuv #{short_id(s['_id'])}* [{page+1}/{len(items)}]\n\n"
-        f"🎮 {s.get('roblox_nick', '-')} (@{s.get('username', '-')})\n"
+        f"👤 @{s.get('username', '-')}\n"
         f"📦 *{s['name']}*\n💰 {s['price']:,} {s['currency']}\n📅 {s['created_at']}"
     )
     b = InlineKeyboardBuilder()
@@ -984,8 +937,7 @@ async def sa_price(msg: types.Message, state: FSMContext):
     d     = await state.get_data()
     uid   = msg.from_user.id
     uname = msg.from_user.username or "user"
-    u     = await get_user(uid)
-    sid   = await add_sale(uid, uname, u.get("roblox_nick", ""), d["s_name"], d.get("s_photo"), d["s_currency"], int(txt))
+    sid   = await add_sale(uid, uname, "", d["s_name"], d.get("s_photo"), d["s_currency"], int(txt))
     await state.clear()
     try:
         cap = f"🛍 Yangi sotuv #{short_id(sid)}\n👤 @{uname}\n📦 {d['s_name']}\n💰 {int(txt):,} {d['s_currency']}"
@@ -1105,7 +1057,7 @@ async def adm_ord(cb: types.CallbackQuery):
         b.button(text="❌ Rad etish", callback_data=f"ono_{o['_id']}")
         b.adjust(2)
         await cb.message.answer(
-            f"🛒 *Buyurtma #{short_id(o['_id'])}*\n👤 @{o['username']}\n🎮 {o['roblox_nick']}\n"
+            f"🛒 *Buyurtma #{short_id(o['_id'])}*\n👤 @{o['username']}\n"
             f"🪙 {o['robux_amount']} Robux — {o['price_sum']:,} so'm\n🕐 {o['created_at']}",
             reply_markup=b.as_markup()
         )
@@ -1124,7 +1076,7 @@ async def adm_tr(cb: types.CallbackQuery):
         b.button(text="✏️ Tahrirlash", callback_data=f"etrade_{t['_id']}")
         b.button(text="🗑 O'chirish",  callback_data=f"dtrade_{t['_id']}")
         b.adjust(2)
-        caption = f"🔄 *#{short_id(t['_id'])}* {t['name']}\n🎮 {t.get('roblox_nick','-')} (@{t.get('username','-')})\n📝 {t['bio']}"
+        caption = f"🔄 *#{short_id(t['_id'])}* {t['name']}\n👤 @{t.get('username','-')}\n📝 {t['bio']}"
         if t.get("photo_id"):
             await cb.message.answer_photo(t["photo_id"], caption=caption, reply_markup=b.as_markup())
         else:
@@ -1144,7 +1096,7 @@ async def adm_sl(cb: types.CallbackQuery):
         b.button(text="✏️ Tahrirlash", callback_data=f"esale_{s['_id']}")
         b.button(text="🗑 O'chirish",  callback_data=f"dsale_{s['_id']}")
         b.adjust(2)
-        caption = f"🛍 *#{short_id(s['_id'])}* {s['name']}\n🎮 {s.get('roblox_nick','-')} (@{s.get('username','-')})\n💰 {s['price']:,} {s['currency']}"
+        caption = f"🛍 *#{short_id(s['_id'])}* {s['name']}\n👤 @{s.get('username','-')}\n💰 {s['price']:,} {s['currency']}"
         if s.get("photo_id"):
             await cb.message.answer_photo(s["photo_id"], caption=caption, reply_markup=b.as_markup())
         else:
