@@ -22,7 +22,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 BOT_TOKEN        = os.getenv("BOT_TOKEN")
 ADMIN_ID         = int(os.getenv("ADMIN_ID", "0"))
 MONGO_URI        = os.getenv("MONGO_URI")
-REQUIRED_CHANNEL = os.getenv("CHANNEL", "@bulldrop_n1")
+REQUIRED_CHANNEL  = os.getenv("CHANNEL", "@bulldrop_n1")
+REQUIRED_CHANNEL2 = os.getenv("CHANNEL2", "@uzb_edits")
 CARD_NUMBER      = os.getenv("CARD_NUMBER", "9860 1234 5678 9012")
 CARD_OWNER       = os.getenv("CARD_OWNER", "ADMIN NOMI")
 CHAT_LINK        = os.getenv("CHAT_LINK", "https://t.me/roblox_uz")
@@ -101,10 +102,11 @@ async def reject_deposit(did):
     await deposits.update_one({"_id": ObjectId(str(did))}, {"$set": {"status": "rejected"}})
 
 # orders
-async def add_order(uid, uname, nick, robux, price):
+async def add_order(uid, uname, nick, robux, price, mood=""):
     r = await orders.insert_one({
         "user_id": uid, "username": uname, "roblox_nick": nick,
-        "robux_amount": robux, "price_sum": price, "status": "pending", "created_at": now()
+        "robux_amount": robux, "price_sum": price, "mood": mood,
+        "status": "pending", "created_at": now()
     })
     return r.inserted_id
 
@@ -148,10 +150,10 @@ async def delete_trade(tid):
     await trades.update_one({"_id": ObjectId(str(tid))}, {"$set": {"status": "deleted"}})
 
 # sales
-async def add_sale(uid, uname, nick, name, photo_id, currency, price):
+async def add_sale(uid, uname, nick, name, bio, photo_id, currency, price):
     r = await sales.insert_one({
         "user_id": uid, "username": uname, "roblox_nick": nick,
-        "name": name, "photo_id": photo_id, "currency": currency,
+        "name": name, "bio": bio, "photo_id": photo_id, "currency": currency,
         "price": price, "status": "active", "created_at": now()
     })
     return r.inserted_id
@@ -199,16 +201,24 @@ class Dep(StatesGroup):
 
 class TradeAdd(StatesGroup):
     name  = State()
-    bio   = State()
     photo = State()
+    bio   = State()
 
 class TradeEdit(StatesGroup):
     name = State()
     bio  = State()
 
+class BuyFlow(StatesGroup):
+    nick = State()
+    mood = State()
+
+class ContactAdmin(StatesGroup):
+    message = State()
+
 class SaleAdd(StatesGroup):
     name     = State()
     photo    = State()
+    bio      = State()
     currency = State()
     price    = State()
 
@@ -234,7 +244,8 @@ dp  = Dispatcher(storage=MemoryStorage())
 # ═══════════════════════════════════════════════════════
 def sub_kb():
     b = InlineKeyboardBuilder()
-    b.button(text="📢 Kanalga obuna bo'lish", url=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}")
+    b.button(text="📢 1-kanalga obuna bo'lish", url=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}")
+    b.button(text="📢 2-kanalga obuna bo'lish", url=f"https://t.me/{REQUIRED_CHANNEL2.lstrip('@')}")
     b.button(text="✅ Obunani tasdiqlash", callback_data="check_sub")
     b.adjust(1)
     return b.as_markup()
@@ -249,7 +260,8 @@ def main_kb():
     b.button(text="➕ Trade qo'shish")
     b.button(text="➕ Sotish qo'shish")
     b.button(text="💬 Chat")
-    b.adjust(2, 2, 2, 2)
+    b.button(text="📜 Shartnoma qilish")
+    b.adjust(2, 2, 2, 2, 1)
     return b.as_markup(resize_keyboard=True)
 
 def cancel_kb():
@@ -269,16 +281,23 @@ def skip_cancel_kb():
 # ═══════════════════════════════════════════════════════
 async def is_sub(uid: int) -> bool:
     try:
-        m = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=uid)
-        return m.status in ["creator", "administrator", "member"]
+        m1 = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=uid)
+        ok1 = m1.status in ["creator", "administrator", "member"]
     except Exception as e:
-        logging.error(f"Sub check xato: {e}")
-        return False
+        logging.error(f"Sub check xato (1-kanal): {e}")
+        ok1 = False
+    try:
+        m2 = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL2, user_id=uid)
+        ok2 = m2.status in ["creator", "administrator", "member"]
+    except Exception as e:
+        logging.error(f"Sub check xato (2-kanal): {e}")
+        ok2 = False
+    return ok1 and ok2
 
 async def check_access(msg: types.Message, state: FSMContext) -> bool:
     uid = msg.from_user.id
     if not await is_sub(uid):
-        await msg.answer("❌ Avval kanalga obuna bo'ling!", reply_markup=sub_kb())
+        await msg.answer("❌ Avval ikkala kanalga ham obuna bo'ling!", reply_markup=sub_kb())
         return False
     return True
 
@@ -313,14 +332,16 @@ async def _send_or_edit(cb: types.CallbackQuery, photo_id, text, markup):
 async def cmd_start(msg: types.Message, state: FSMContext):
     uid = msg.from_user.id
     if not await is_sub(uid):
-        await msg.answer("👋 Salom! Botdan foydalanish uchun avval kanalimizga obuna bo'ling!", reply_markup=sub_kb())
+        await msg.answer("👋 Salom! Botdan foydalanish uchun avval ikkala kanalimizga ham obuna bo'ling!", reply_markup=sub_kb())
         return
     await upsert_user(uid, msg.from_user.username or "user")
-    u   = await get_user(uid)
-    bal = u.get("balance", 0) if u else 0
     await msg.answer(
         f"🌟 *Assalomu alaykum, {msg.from_user.first_name}!*\n\n"
-        f"💰 Balans: *{bal:,} so'm*\n\n"
+        f"🤖 Bu bot orqali siz:\n"
+        f"🛒 Robux sotib olishingiz,\n"
+        f"📊 O'z buyumlaringizni sotishingiz,\n"
+        f"🔄 Boshqa foydalanuvchilar bilan trade qilishingiz,\n"
+        f"📜 Admin bilan shartnoma asosida ishlashingiz mumkin.\n\n"
         f"👇 Quyidagi menyudan foydalaning:",
         reply_markup=main_kb()
     )
@@ -329,7 +350,7 @@ async def cmd_start(msg: types.Message, state: FSMContext):
 async def cb_check_sub(cb: types.CallbackQuery, state: FSMContext):
     uid = cb.from_user.id
     if not await is_sub(uid):
-        await cb.answer("❌ Hali obuna bo'lmagansiz!", show_alert=True)
+        await cb.answer("❌ Hali ikkala kanalga ham obuna bo'lmagansiz!", show_alert=True)
         return
     try:
         await cb.message.delete()
@@ -576,21 +597,20 @@ async def cmd_buy(msg: types.Message, state: FSMContext):
         return
     uid = msg.from_user.id
     bal = await get_balance(uid)
-    lines = "\n".join([f"{'🔥' if r == 700 else '🪙'} {r} Robux — {p:,} so'm" for r, p in ROBUX_PRICES])
     b = InlineKeyboardBuilder()
     for r, p in ROBUX_PRICES:
         b.button(text=f"{r}Rbx — {p // 1000}k", callback_data=f"buy_{r}")
     b.adjust(3)
     await msg.answer(
-        f"🔥 *ROBUX NARXLAR*\n💰 Balansingiz: *{bal:,} so'm*\n\n{lines}\n\n👇 Miqdorni tanlang:",
+        f"🌟 *Assalomu alaykum!*\n💰 Balansingiz: *{bal:,} so'm*\n\n👇 Pastdagilardan birini tanlang:",
         reply_markup=b.as_markup()
     )
 
 @dp.callback_query(F.data.startswith("buy_"))
-async def cb_buy(cb: types.CallbackQuery):
+async def cb_buy(cb: types.CallbackQuery, state: FSMContext):
     uid = cb.from_user.id
     if not await is_sub(uid):
-        await cb.answer("❌ Avval kanalga obuna bo'ling!", show_alert=True)
+        await cb.answer("❌ Avval ikkala kanalga ham obuna bo'ling!", show_alert=True)
         return
     u = await get_user(uid)
     if not u:
@@ -603,28 +623,96 @@ async def cb_buy(cb: types.CallbackQuery):
         return
     bal = await get_balance(uid)
     if bal < price:
-        await cb.answer(f"❌ Balans yetarli emas!\nKerak: {price:,} so'm\nBalans: {bal:,} so'm", show_alert=True)
+        await cb.answer(f"❌ Hisobingiz yetarli emas!\nKerak: {price:,} so'm\nBalans: {bal:,} so'm", show_alert=True)
+        return
+    await state.update_data(buy_robux=robux, buy_price=price)
+    await cb.message.answer("🎮 Roblox nikingizni kiriting:", reply_markup=cancel_kb())
+    await state.set_state(BuyFlow.nick)
+    await cb.answer()
+
+@dp.message(BuyFlow.nick)
+async def buy_nick(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    nick = msg.text.strip()
+    if len(nick) < 3:
+        await msg.answer("❌ Nik kamida 3 ta belgi bo'lsin, qaytadan kiriting:")
+        return
+    await state.update_data(buy_nick=nick)
+    await msg.answer("😊 Qalaysiz?", reply_markup=cancel_kb())
+    await state.set_state(BuyFlow.mood)
+
+@dp.message(BuyFlow.mood)
+async def buy_mood(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    mood = msg.text.strip()
+    await state.update_data(buy_mood=mood)
+    d = await state.get_data()
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Tasdiqlash", callback_data="buy_confirm")
+    b.button(text="✏️ Tahrirlash", callback_data="buy_redo")
+    b.adjust(2)
+    await msg.answer(
+        f"📋 *Ma'lumotlarni tekshiring*\n\n"
+        f"🎮 Nik: `{d['buy_nick']}`\n"
+        f"🪙 Robux: *{d['buy_robux']}*\n"
+        f"💵 Narx: *{d['buy_price']:,} so'm*\n"
+        f"😊 Qalaysiz: {mood}\n\n"
+        f"Hammasi to'g'ri bo'lsa tasdiqlang:",
+        reply_markup=b.as_markup()
+    )
+
+@dp.callback_query(F.data == "buy_redo")
+async def cb_buy_redo(cb: types.CallbackQuery, state: FSMContext):
+    await cb.message.answer("🎮 Roblox nikingizni qayta kiriting:", reply_markup=cancel_kb())
+    await state.set_state(BuyFlow.nick)
+    await cb.answer()
+
+@dp.callback_query(F.data == "buy_confirm")
+async def cb_buy_confirm(cb: types.CallbackQuery, state: FSMContext):
+    uid  = cb.from_user.id
+    d    = await state.get_data()
+    robux = d.get("buy_robux")
+    price = d.get("buy_price")
+    nick  = d.get("buy_nick")
+    mood  = d.get("buy_mood", "")
+    if not robux or not price or not nick:
+        await cb.answer("❌ Xatolik! Qaytadan boshlang.", show_alert=True)
+        await state.clear()
+        return
+    bal = await get_balance(uid)
+    if bal < price:
+        await cb.answer(f"❌ Hisobingiz yetarli emas!\nKerak: {price:,} so'm\nBalans: {bal:,} so'm", show_alert=True)
+        await state.clear()
         return
     await sub_balance(uid, price)
-    oid = await add_order(uid, cb.from_user.username or "user", "", robux, price)
+    oid = await add_order(uid, cb.from_user.username or "user", nick, robux, price, mood)
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Yuborildi", callback_data=f"ook_{oid}")
+    b.button(text="✅ Tasdiqlash", callback_data=f"ook_{oid}")
     b.button(text="❌ Rad etish", callback_data=f"ono_{oid}")
     b.adjust(2)
     try:
         await bot.send_message(
             ADMIN_ID,
             f"🛒 *Robux buyurtma #{short_id(oid)}*\n\n"
-            f"👤 @{cb.from_user.username or '-'} (`{uid}`)\n"
-            f"🪙 Miqdor: *{robux} Robux*\n💵 Narx: *{price:,} so'm*\n🕐 {now()}",
+            f"1️⃣ Nik: `{nick}`\n"
+            f"2️⃣ Robux: *{robux}*\n"
+            f"3️⃣ Narx: *{price:,} so'm*\n"
+            f"4️⃣ Qalaysiz: {mood}\n\n"
+            f"👤 @{cb.from_user.username or '-'} (`{uid}`)\n🕐 {now()}",
             reply_markup=b.as_markup()
         )
     except Exception:
         pass
+    await state.clear()
     await cb.message.answer(
-        f"✅ Buyurtma qabul qilindi!\n\n🪙 *{robux} Robux*\n"
-        f"💵 {price:,} so'm balansdan ayirildi.\n📋 Buyurtma #{short_id(oid)}\n\n"
-        f"⏳ Admin Roblox accountingizga robux yuboradi. Kuting!",
+        f"✅ So'rovingiz yuborildi!\n\n"
+        f"⏳ Admin tasdiqini kuting, ungacha dam olib turing.\n📋 Buyurtma #{short_id(oid)}",
         reply_markup=main_kb()
     )
     await cb.answer()
@@ -640,7 +728,7 @@ async def cb_ook(cb: types.CallbackQuery):
         return
     await approve_order(oid)
     try:
-        await bot.send_message(o["user_id"], f"🎉 *{o['robux_amount']} Robux* Roblox accountingizga yuborildi!\n📋 Buyurtma #{short_id(ObjectId(str(oid)))}", reply_markup=main_kb())
+        await bot.send_message(o["user_id"], f"🎉 *Robuxingiz tushdi!*\n🪙 {o['robux_amount']} Robux\n🎮 Nik: `{o.get('roblox_nick','-')}`\n📋 Buyurtma #{short_id(ObjectId(str(oid)))}", reply_markup=main_kb())
     except Exception:
         pass
     try:
@@ -660,7 +748,7 @@ async def cb_ono(cb: types.CallbackQuery):
         return
     await reject_order(oid)
     try:
-        await bot.send_message(o["user_id"], f"❌ Buyurtma #{short_id(ObjectId(str(oid)))} rad etildi.\n💰 {o['price_sum']:,} so'm qaytarildi.", reply_markup=main_kb())
+        await bot.send_message(o["user_id"], f"❌ Rad etildi.\n📋 Buyurtma #{short_id(ObjectId(str(oid)))}\n💰 {o['price_sum']:,} so'm hisobingizga qaytarildi.", reply_markup=main_kb())
     except Exception:
         pass
     try:
@@ -687,7 +775,7 @@ async def _send_trade_page(target, items, page, is_cb=True):
     caption = (
         f"🔄 *Trade #{short_id(t['_id'])}* [{page+1}/{len(items)}]\n\n"
         f"👤 @{t.get('username', '-')}\n"
-        f"📦 *{t['name']}*\n📝 {t['bio']}\n📅 {t['created_at']}"
+        f"📦 *{t['name']}*\n📝 {t.get('bio') or '-'}\n📅 {t['created_at']}"
     )
     b = InlineKeyboardBuilder()
     if page > 0:
@@ -734,7 +822,23 @@ async def ta_name(msg: types.Message, state: FSMContext):
         await msg.answer("❌ Sarlavha kamida 5 ta belgi bo'lsin:")
         return
     await state.update_data(t_name=msg.text.strip())
-    await msg.answer("📝 Bio yozing (nima taklif qilyapsiz, nima xohlaysiz):", reply_markup=cancel_kb())
+    await msg.answer("📸 Rasm yuboring (ixtiyoriy):", reply_markup=skip_cancel_kb())
+    await state.set_state(TradeAdd.photo)
+
+@dp.message(TradeAdd.photo, F.photo)
+async def ta_photo(msg: types.Message, state: FSMContext):
+    await state.update_data(t_photo=msg.photo[-1].file_id)
+    await msg.answer("📝 Bio yozing (nima taklif qilyapsiz, nima xohlaysiz) yoki o'tkazib yuboring:", reply_markup=skip_cancel_kb())
+    await state.set_state(TradeAdd.bio)
+
+@dp.message(TradeAdd.photo)
+async def ta_no_photo(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    await state.update_data(t_photo=None)
+    await msg.answer("📝 Bio yozing (nima taklif qilyapsiz, nima xohlaysiz) yoki o'tkazib yuboring:", reply_markup=skip_cancel_kb())
     await state.set_state(TradeAdd.bio)
 
 @dp.message(TradeAdd.bio)
@@ -743,38 +847,19 @@ async def ta_bio(msg: types.Message, state: FSMContext):
         await state.clear()
         await msg.answer("Bekor qilindi.", reply_markup=main_kb())
         return
-    await state.update_data(t_bio=msg.text.strip())
-    await msg.answer("📸 Rasm yuboring (ixtiyoriy):", reply_markup=skip_cancel_kb())
-    await state.set_state(TradeAdd.photo)
-
-@dp.message(TradeAdd.photo, F.photo)
-async def ta_photo(msg: types.Message, state: FSMContext):
+    bio = "" if msg.text == "⏭ O'tkazib yuborish" else msg.text.strip()
     d        = await state.get_data()
     uid      = msg.from_user.id
     uname    = msg.from_user.username or "user"
-    u        = await get_user(uid)
-    photo_id = msg.photo[-1].file_id
-    tid = await add_trade(uid, uname, "", d["t_name"], d["t_bio"], photo_id)
+    photo_id = d.get("t_photo")
+    tid = await add_trade(uid, uname, "", d["t_name"], bio, photo_id)
     await state.clear()
     try:
-        await bot.send_photo(ADMIN_ID, photo_id, caption=f"🔄 Yangi trade #{short_id(tid)}\n👤 @{uname}\n📦 {d['t_name']}\n📝 {d['t_bio']}")
-    except Exception:
-        pass
-    await msg.answer(f"✅ Trade e'lon qilindi! *#{short_id(tid)}*", reply_markup=main_kb())
-
-@dp.message(TradeAdd.photo)
-async def ta_no_photo(msg: types.Message, state: FSMContext):
-    if msg.text == "❌ Bekor qilish":
-        await state.clear()
-        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
-        return
-    d     = await state.get_data()
-    uid   = msg.from_user.id
-    uname = msg.from_user.username or "user"
-    tid   = await add_trade(uid, uname, "", d["t_name"], d["t_bio"], None)
-    await state.clear()
-    try:
-        await bot.send_message(ADMIN_ID, f"🔄 Yangi trade #{short_id(tid)}\n👤 @{uname}\n📦 {d['t_name']}\n📝 {d['t_bio']}")
+        cap = f"🔄 Yangi trade #{short_id(tid)}\n👤 @{uname}\n📦 {d['t_name']}\n📝 {bio or '-'}"
+        if photo_id:
+            await bot.send_photo(ADMIN_ID, photo_id, caption=cap)
+        else:
+            await bot.send_message(ADMIN_ID, cap)
     except Exception:
         pass
     await msg.answer(f"✅ Trade e'lon qilindi! *#{short_id(tid)}*", reply_markup=main_kb())
@@ -847,7 +932,7 @@ async def _send_sale_page(target, items, page, is_cb=True):
     caption = (
         f"🛍 *Sotuv #{short_id(s['_id'])}* [{page+1}/{len(items)}]\n\n"
         f"👤 @{s.get('username', '-')}\n"
-        f"📦 *{s['name']}*\n💰 {s['price']:,} {s['currency']}\n📅 {s['created_at']}"
+        f"📦 *{s['name']}*\n📝 {s.get('bio') or '-'}\n💰 {s['price']:,} {s['currency']}\n📅 {s['created_at']}"
     )
     b = InlineKeyboardBuilder()
     if page > 0:
@@ -897,7 +982,8 @@ async def sa_name(msg: types.Message, state: FSMContext):
 @dp.message(SaleAdd.photo, F.photo)
 async def sa_photo(msg: types.Message, state: FSMContext):
     await state.update_data(s_photo=msg.photo[-1].file_id)
-    await _ask_currency(msg, state)
+    await msg.answer("📝 Bio yozing (buyum haqida) yoki o'tkazib yuboring:", reply_markup=skip_cancel_kb())
+    await state.set_state(SaleAdd.bio)
 
 @dp.message(SaleAdd.photo)
 async def sa_no_photo(msg: types.Message, state: FSMContext):
@@ -906,6 +992,17 @@ async def sa_no_photo(msg: types.Message, state: FSMContext):
         await msg.answer("Bekor qilindi.", reply_markup=main_kb())
         return
     await state.update_data(s_photo=None)
+    await msg.answer("📝 Bio yozing (buyum haqida) yoki o'tkazib yuboring:", reply_markup=skip_cancel_kb())
+    await state.set_state(SaleAdd.bio)
+
+@dp.message(SaleAdd.bio)
+async def sa_bio(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    bio = "" if msg.text == "⏭ O'tkazib yuborish" else msg.text.strip()
+    await state.update_data(s_bio=bio)
     await _ask_currency(msg, state)
 
 async def _ask_currency(msg: types.Message, state: FSMContext):
@@ -937,10 +1034,11 @@ async def sa_price(msg: types.Message, state: FSMContext):
     d     = await state.get_data()
     uid   = msg.from_user.id
     uname = msg.from_user.username or "user"
-    sid   = await add_sale(uid, uname, "", d["s_name"], d.get("s_photo"), d["s_currency"], int(txt))
+    bio   = d.get("s_bio", "")
+    sid   = await add_sale(uid, uname, "", d["s_name"], bio, d.get("s_photo"), d["s_currency"], int(txt))
     await state.clear()
     try:
-        cap = f"🛍 Yangi sotuv #{short_id(sid)}\n👤 @{uname}\n📦 {d['s_name']}\n💰 {int(txt):,} {d['s_currency']}"
+        cap = f"🛍 Yangi sotuv #{short_id(sid)}\n👤 @{uname}\n📦 {d['s_name']}\n📝 {bio or '-'}\n💰 {int(txt):,} {d['s_currency']}"
         if d.get("s_photo"):
             await bot.send_photo(ADMIN_ID, d["s_photo"], caption=cap)
         else:
@@ -1018,6 +1116,52 @@ async def cmd_chat(msg: types.Message, state: FSMContext):
     await msg.answer("💬 Rasmiy chatimizga xush kelibsiz!", reply_markup=b.as_markup())
 
 # ═══════════════════════════════════════════════════════
+# SHARTNOMA QILISH
+# ═══════════════════════════════════════════════════════
+@dp.message(F.text == "📜 Shartnoma qilish")
+async def cmd_contract(msg: types.Message, state: FSMContext):
+    if not await check_access(msg, state):
+        return
+    b = InlineKeyboardBuilder()
+    b.button(text="✉️ Adminga xabar yuborish", callback_data="send_admin_msg")
+    await msg.answer(
+        "📜 *Shartnoma qilish*\n\n"
+        "👤 Admin: @zuko_help\n"
+        "💬 Nima xizmat?\n\n"
+        "Quyidagi tugma orqali to'g'ridan-to'g'ri adminga xabar yuborishingiz mumkin.",
+        reply_markup=b.as_markup()
+    )
+
+@dp.callback_query(F.data == "send_admin_msg")
+async def cb_send_admin_msg(cb: types.CallbackQuery, state: FSMContext):
+    await cb.message.answer("✍️ Xabaringizni yozing:", reply_markup=cancel_kb())
+    await state.set_state(ContactAdmin.message)
+    await cb.answer()
+
+@dp.message(ContactAdmin.message)
+async def contact_admin_text(msg: types.Message, state: FSMContext):
+    if msg.text == "❌ Bekor qilish":
+        await state.clear()
+        await msg.answer("Bekor qilindi.", reply_markup=main_kb())
+        return
+    uid   = msg.from_user.id
+    uname = msg.from_user.username or "-"
+    fname = msg.from_user.full_name
+    text = (
+        f"📨 *Yangi xabar (Shartnoma)*\n\n"
+        f"👤 Ism: {fname}\n"
+        f"🔗 Username: @{uname}\n"
+        f"🆔 ID: `{uid}`\n\n"
+        f"💬 Xabar:\n{msg.text}"
+    )
+    try:
+        await bot.send_message(ADMIN_ID, text)
+    except Exception:
+        pass
+    await state.clear()
+    await msg.answer("✅ Xabaringiz adminga yuborildi! Tez orada javob beriladi.", reply_markup=main_kb())
+
+# ═══════════════════════════════════════════════════════
 # ADMIN PANEL
 # ═══════════════════════════════════════════════════════
 @dp.message(Command("admin"))
@@ -1053,12 +1197,14 @@ async def adm_ord(cb: types.CallbackQuery):
         return
     for o in ol:
         b = InlineKeyboardBuilder()
-        b.button(text="✅ Yuborildi", callback_data=f"ook_{o['_id']}")
+        b.button(text="✅ Tasdiqlash", callback_data=f"ook_{o['_id']}")
         b.button(text="❌ Rad etish", callback_data=f"ono_{o['_id']}")
         b.adjust(2)
         await cb.message.answer(
             f"🛒 *Buyurtma #{short_id(o['_id'])}*\n👤 @{o['username']}\n"
-            f"🪙 {o['robux_amount']} Robux — {o['price_sum']:,} so'm\n🕐 {o['created_at']}",
+            f"🎮 Nik: `{o.get('roblox_nick','-')}`\n"
+            f"🪙 {o['robux_amount']} Robux — {o['price_sum']:,} so'm\n"
+            f"😊 Qalaysiz: {o.get('mood','-')}\n🕐 {o['created_at']}",
             reply_markup=b.as_markup()
         )
     await cb.answer()
@@ -1096,7 +1242,7 @@ async def adm_sl(cb: types.CallbackQuery):
         b.button(text="✏️ Tahrirlash", callback_data=f"esale_{s['_id']}")
         b.button(text="🗑 O'chirish",  callback_data=f"dsale_{s['_id']}")
         b.adjust(2)
-        caption = f"🛍 *#{short_id(s['_id'])}* {s['name']}\n👤 @{s.get('username','-')}\n💰 {s['price']:,} {s['currency']}"
+        caption = f"🛍 *#{short_id(s['_id'])}* {s['name']}\n👤 @{s.get('username','-')}\n📝 {s.get('bio') or '-'}\n💰 {s['price']:,} {s['currency']}"
         if s.get("photo_id"):
             await cb.message.answer_photo(s["photo_id"], caption=caption, reply_markup=b.as_markup())
         else:
