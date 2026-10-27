@@ -1,105 +1,133 @@
-            bot.send_message(chat_id, "\n".join(lines))
-        bot.send_message(chat_id, "Admin menyusi:", reply_markup=admin_back_menu())
-    elif data == "admin_products":
-        if not is_admin(user_id):
-            bot.send_message(chat_id, "⛔ Ruxsat yo'q.")
-            return
-        lines = ["🛍 <b>Mahsulotlar</b>"]
-        for pid, p in PRODUCTS.items():
-            lines.append(f"{pid}. {escape(p['name'])} — {money(p['price'])}")
-        lines.append("\nMahsulot qo'shish/narxini o'zgartirish uchun bot.py dagi PRODUCTS ro'yxatini tahrirlang.")
-        bot.send_message(chat_id, "\n".join(lines), reply_markup=admin_back_menu())
+import asyncio
+import logging
+import os
+
+from aiohttp import web
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
+from aiogram.types import (
+    CallbackQuery,
+    ChatMemberUpdated,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+
+logging.basicConfig(level=logging.INFO)
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHANNEL = os.getenv("CHANNEL", "@BLOXFRUIT_UZBEKISTAN_SHOP")
+CHANNEL_URL = f"https://t.me/{CHANNEL.lstrip('@')}"
+
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
+
+
+# ---------- Tugmalar (style: primary=ko'k, success=yashil, danger=qizil) ----------
+def sub_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url=CHANNEL_URL, style="primary")],
+        [InlineKeyboardButton(text="✅ Obunani tekshirish", callback_data="check", style="success")],
+    ])
+
+
+def menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Akkaunt e'lon berish", callback_data="post_account", style="success")],
+        [InlineKeyboardButton(text="📢 Bizning kanal", url=CHANNEL_URL, style="primary")],
+    ])
+
+
+def back_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="menu", style="danger")],
+    ])
+
+
+# ---------- Obunani tekshirish ----------
+async def is_subscribed(user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(CHANNEL, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        logging.warning("Obunani tekshirib bo'lmadi: %s", e)
+        return False
+
+
+SUB_TEXT = (
+    "👋 Botdan foydalanish uchun avval kanalimizga obuna bo'ling.\n\n"
+    "Obuna bo'lgach, bot sizni avtomatik tasdiqlaydi."
+)
+MENU_TEXT = "✅ Obuna tasdiqlandi!\n\nBo'limni tanlang:"
+
+
+# ---------- Handlerlar ----------
+@dp.message(CommandStart())
+async def start(message: Message):
+    if await is_subscribed(message.from_user.id):
+        await message.answer(MENU_TEXT, reply_markup=menu_kb())
     else:
-        bot.send_message(chat_id, "Tushunarsiz tugma. /menu ni bosing.")
+        await message.answer(SUB_TEXT, reply_markup=sub_kb())
 
 
-def admin_back_menu():
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("⬅️ Admin panel", callback_data="admin"))
-    markup.add(types.InlineKeyboardButton("🏠 Bosh menyu", callback_data="home"))
-    return markup
+@dp.callback_query(F.data == "check")
+async def check(call: CallbackQuery):
+    if await is_subscribed(call.from_user.id):
+        await call.message.edit_text(MENU_TEXT, reply_markup=menu_kb())
+    else:
+        await call.answer("❌ Siz hali kanalga obuna bo'lmagansiz!", show_alert=True)
 
 
-@bot.message_handler(func=lambda message: message.from_user.id in checkout_waiting, content_types=["text"])
-def receive_checkout(message):
-    global next_order_id
-    user_id = message.from_user.id
-    if message.text.strip().lower() == "/menu":
-        checkout_waiting.discard(user_id)
-        send_home(message.chat.id, user_id)
+@dp.callback_query(F.data == "menu")
+async def menu(call: CallbackQuery):
+    if not await is_subscribed(call.from_user.id):
+        await call.message.edit_text(SUB_TEXT, reply_markup=sub_kb())
         return
+    await call.message.edit_text("Bo'limni tanlang:", reply_markup=menu_kb())
 
-    cart = carts.get(user_id, {})
-    if not cart:
-        checkout_waiting.discard(user_id)
-        bot.send_message(message.chat.id, "Savatingiz bo'sh. /menu orqali qayta boshlang.")
+
+@dp.callback_query(F.data == "post_account")
+async def post_account(call: CallbackQuery):
+    if not await is_subscribed(call.from_user.id):
+        await call.message.edit_text(SUB_TEXT, reply_markup=sub_kb())
         return
-
-    contact = message.text.strip()
-    if len(contact) < 5:
-        bot.reply_to(message, "Iltimos, ism va telefon raqamingizni to'liqroq yuboring.")
-        return
-
-    item_lines = []
-    total = 0
-    for product_id, quantity in cart.items():
-        product = PRODUCTS.get(product_id)
-        if product and quantity > 0:
-            subtotal = product["price"] * quantity
-            total += subtotal
-            item_lines.append(f"{product['name']} × {quantity} ({money(subtotal)})")
-
-    if total <= 0:
-        bot.send_message(message.chat.id, "Savatdagi mahsulotlar topilmadi. /menu ni bosing.")
-        checkout_waiting.discard(user_id)
-        return
-
-    order = {
-        "id": next_order_id,
-        "user_id": user_id,
-        "customer": message.from_user.full_name or "Mijoz",
-        "contact": contact,
-        "items": "; ".join(item_lines),
-        "total": total,
-        "status": "Yangi",
-    }
-    orders.append(order)
-    next_order_id += 1
-    carts[user_id] = {}
-    checkout_waiting.discard(user_id)
-
-    bot.send_message(
-        message.chat.id,
-        f"✅ <b>Buyurtmangiz qabul qilindi!</b>\n\n"
-        f"Buyurtma raqami: <b>#{order['id']}</b>\n"
-        f"💳 Jami: <b>{money(total)}</b>\n\n"
-        "Admin siz bilan bog'lanadi.",
-        reply_markup=main_menu(user_id)
+    await call.message.edit_text(
+        "📝 Akkaunt e'lon berish bo'limi.\n\nTez orada qo'shiladi...",
+        reply_markup=back_kb(),
     )
 
-    if ADMIN_ID and ADMIN_ID != 123456789:
+
+# Foydalanuvchi kanalga qo'shilganda avtomatik tasdiqlash
+# (bot kanalda ADMIN bo'lishi shart)
+@dp.chat_member()
+async def on_join(event: ChatMemberUpdated):
+    if (event.chat.username or "").lower() != CHANNEL.lstrip("@").lower():
+        return
+    if event.new_chat_member.status in ("member", "administrator", "creator"):
         try:
-            bot.send_message(
-                ADMIN_ID,
-                f"🔔 <b>Yangi buyurtma #{order['id']}</b>\n\n"
-                f"👤 {escape(order['customer'])}\n"
-                f"🆔 <code>{user_id}</code>\n"
-                f"📞 {escape(contact)}\n"
-                f"🧾 {escape(order['items'])}\n"
-                f"💳 <b>{money(total)}</b>"
+            await bot.send_message(
+                event.new_chat_member.user.id, MENU_TEXT, reply_markup=menu_kb()
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logging.info("Xabar yuborib bo'lmadi: %s", e)
 
 
-@bot.message_handler(func=lambda message: True, content_types=["text"])
-def fallback(message):
-    bot.send_message(message.chat.id, "Menyuni ochish uchun /menu ni bosing.", reply_markup=main_menu(message.from_user.id))
+# ---------- Render uchun web server ----------
+async def health(request):
+    return web.Response(text="Bot ishlayapti")
+
+
+async def main():
+    app = web.Application()
+    app.router.add_get("/", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
+    await site.start()
+
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
 if __name__ == "__main__":
-    if BOT_TOKEN == "BOT_TOKENINGIZNI_SHU_YERGA_QOYING":
-        print("XATO: bot.py ichidagi BOT_TOKEN qiymatiga BotFather tokenini kiriting.")
-    else:
-        print("Do'kon boti ishga tushdi. To'xtatish uchun Ctrl+C bosing.")
-        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
+    asyncio.run(main())
