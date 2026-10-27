@@ -5,7 +5,7 @@ import os
 import time
 from datetime import datetime
 
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -19,6 +19,7 @@ from aiogram.types import (
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -33,8 +34,13 @@ POST_CHANNEL = os.getenv("POST_CHANNEL", "@roblox_accunt_savdo")    # e'lonlar k
 GARANT = os.getenv("GARANT", "@kazen_rbx")
 CHANNEL_URL = f"https://t.me/{CHANNEL.lstrip('@')}"
 
-# Limitdan ozod adminlar (Telegram ID, vergul bilan): ADMIN_IDS=123,456
-ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+# Adminlar: limitlar (7 kun va 3 ta e'lon) ularga ishlamaydi
+ADMIN_IDS = {8789323396}
+ADMIN_IDS |= {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+
+# Render o'zi beradigan tashqi manzil (uxlab qolmaslik uchun ping)
+SELF_URL = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("SELF_URL", "")
+PING_SECONDS = int(os.getenv("PING_SECONDS", "300"))  # har 5 daqiqada
 
 COOLDOWN_DAYS = 7
 MAX_ACTIVE = 3
@@ -96,7 +102,7 @@ async def db_deactivate(post_id) -> None:
 
 
 async def check_limits(user_id: int) -> tuple[bool, str]:
-    """E'lon berish mumkinmi? (True, '') yoki (False, sabab)"""
+    """E'lon berish mumkinmi? (True, '') yoki (False, sabab). Adminlarga cheklov yo'q."""
     if user_id in ADMIN_IDS:
         return True, ""
 
@@ -240,7 +246,10 @@ async def on_join(event: ChatMemberUpdated):
 @dp.callback_query(F.data == "cancel")
 async def cancel(call: CallbackQuery, state: FSMContext):
     await state.clear()
-    await call.message.delete()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
     await call.message.answer("❌ Bekor qilindi.", reply_markup=main_menu())
 
 
@@ -255,7 +264,8 @@ async def my_posts(message: Message, state: FSMContext):
     if not posts:
         await message.answer("📭 Kanalda sizning faol e'loningiz yo'q.")
         return
-    await message.answer(f"🗂 Faol e'lonlaringiz: <b>{len(posts)}/{MAX_ACTIVE}</b>", parse_mode="HTML")
+    limit_text = "∞" if message.from_user.id in ADMIN_IDS else str(MAX_ACTIVE)
+    await message.answer(f"🗂 Faol e'lonlaringiz: <b>{len(posts)}/{limit_text}</b>", parse_mode="HTML")
     for p in posts:
         date = datetime.fromtimestamp(p["created_at"]).strftime("%d.%m.%Y %H:%M")
         await message.answer(
@@ -274,7 +284,7 @@ async def delete_post(call: CallbackQuery):
     try:
         await bot.delete_messages(POST_CHANNEL, post["msg_ids"])
     except Exception as e:
-        # Kanaldan qo'lda o'chirilgan bo'lishi mumkin — baribir bazada yopamiz
+        # Kanaldan qo'lda o'chirilgan bo'lishi mumkin, baribir bazada yopamiz
         logging.warning("Kanaldan o'chirishda xato: %s", e)
     await db_deactivate(post["_id"])
     await call.message.edit_text("🗑 E'lon kanaldan o'chirildi.")
@@ -292,6 +302,14 @@ async def post_start(message: Message, state: FSMContext):
     if not ok:
         await message.answer(reason, parse_mode="HTML")
         return
+
+    # Pastdagi menyuni yashiramiz (belgi xabarni darhol o'chiramiz)
+    tmp = await message.answer("⏳", reply_markup=ReplyKeyboardRemove())
+    try:
+        await tmp.delete()
+    except Exception:
+        pass
+
     await state.set_state(Post.game)
     await message.answer("🎮 Qaysi o'yin akkaunti?", reply_markup=games_kb())
 
@@ -446,7 +464,10 @@ async def publish(call: CallbackQuery, state: FSMContext):
     ok, reason = await check_limits(call.from_user.id)
     if not ok:
         await state.clear()
-        await call.message.delete()
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
         await call.message.answer(reason, parse_mode="HTML", reply_markup=main_menu())
         return
 
@@ -460,21 +481,46 @@ async def publish(call: CallbackQuery, state: FSMContext):
 
     await db_add_post(call.from_user.id, [m.message_id for m in msgs], data["game"], data["nick"])
     await state.clear()
-    await call.message.delete()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
+    if call.from_user.id in ADMIN_IDS:
+        tail = "Admin sifatida sizda cheklov yo'q."
+    else:
+        tail = f"Keyingi e'lonni {COOLDOWN_DAYS} kundan keyin berishingiz mumkin."
     await call.message.answer(
-        f"🚀 E'loningiz {POST_CHANNEL} kanaliga joylandi!\n\n"
-        f"Keyingi e'lonni {COOLDOWN_DAYS} kundan keyin berishingiz mumkin.",
+        f"🚀 E'loningiz {POST_CHANNEL} kanaliga joylandi!\n\n{tail}",
         reply_markup=main_menu(),
     )
 
 
-# ---------- Render uchun web server ----------
+# ---------- Render: web server va uxlab qolishdan himoya ----------
 async def health(request):
     return web.Response(text="Bot ishlayapti")
 
 
+async def keep_alive():
+    """Har PING_SECONDS da o'z manzilini ping qiladi, Render uxlatib qo'ymaydi."""
+    if not SELF_URL:
+        logging.warning(
+            "RENDER_EXTERNAL_URL topilmadi. Environment'ga SELF_URL=https://sizning-bot.onrender.com qo'shing."
+        )
+        return
+    await asyncio.sleep(30)
+    async with ClientSession(timeout=ClientTimeout(total=20)) as session:
+        while True:
+            try:
+                async with session.get(SELF_URL) as resp:
+                    logging.info("Ping: %s", resp.status)
+            except Exception as e:
+                logging.warning("Ping xatosi: %s", e)
+            await asyncio.sleep(PING_SECONDS)
+
+
 async def main():
-    await mongo.admin.command("ping")  # ulanishni tekshiradi, xato bo'lsa logda ko'rinadi
+    await mongo.admin.command("ping")
     logging.info("MongoDB ulandi")
     await db_init()
 
@@ -484,6 +530,8 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     await site.start()
+
+    ping_task = asyncio.create_task(keep_alive())  # noqa: F841 (havolani saqlab turamiz)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
